@@ -174,7 +174,7 @@ function App() {
   const [draftUrl, setDraftUrl] = useState(storedSettings.baseUrl);
   const [draftCredentials, setDraftCredentials] = useState(storedSettings.credentials);
   const [showSettings, setShowSettings] = useState(false);
-  const [view, setView] = useState<'dashboard' | 'api'>(() => window.location.pathname.startsWith('/api') ? 'api' : 'dashboard');
+  const [view, setView] = useState<'dashboard' | 'api' | 'operator'>(() => window.location.pathname.startsWith('/api') ? 'api' : window.location.pathname.startsWith('/operator') ? 'operator' : 'dashboard');
   const [connection, setConnection] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [error, setError] = useState('');
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -186,7 +186,7 @@ function App() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
-    const onPopState = () => setView(window.location.pathname.startsWith('/api') ? 'api' : 'dashboard');
+    const onPopState = () => setView(window.location.pathname.startsWith('/api') ? 'api' : window.location.pathname.startsWith('/operator') ? 'operator' : 'dashboard');
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
@@ -311,8 +311,8 @@ function App() {
     setSettings(next); setShowSettings(false); setSelectedSignal(''); void loadDashboard(next);
   }
 
-  function navigate(nextView: 'dashboard' | 'api') {
-    window.history.pushState({}, '', nextView === 'api' ? '/api' : '/');
+  function navigate(nextView: 'dashboard' | 'api' | 'operator') {
+    window.history.pushState({}, '', nextView === 'api' ? '/api' : nextView === 'operator' ? '/operator' : '/');
     setView(nextView);
   }
 
@@ -321,11 +321,11 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="product"><span className="product-symbol"><Activity size={17} /></span><span>Performance Insight <em>Operator Dashboard</em></span></div>
-        <nav className="page-nav"><button className={view === 'dashboard' ? 'selected' : ''} onClick={() => navigate('dashboard')}>Overview</button><button className={view === 'api' ? 'selected' : ''} onClick={() => navigate('api')}><Braces size={14} /> API Explorer</button></nav>
+        <nav className="page-nav"><button className={view === 'dashboard' ? 'selected' : ''} onClick={() => navigate('dashboard')}>Overview</button><button className={view === 'operator' ? 'selected' : ''} onClick={() => navigate('operator')}><Gauge size={14} /> Operator Dashboard</button><button className={view === 'api' ? 'selected' : ''} onClick={() => navigate('api')}><Braces size={14} /> API Explorer</button></nav>
         <div className="topbar-right"><span className={`connection-pill ${connected ? 'is-online' : ''}`}><i />{connected ? 'CONNECTED' : connection === 'connecting' ? 'CONNECTING' : 'NOT CONNECTED'}</span><span className="clock-label"><Clock3 size={14} />{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Live operations'}</span><button className="top-icon" title="Connection settings" onClick={() => setShowSettings(true)}><Settings2 size={18} /></button></div>
       </header>
 
-      {view === 'api' ? <ApiExplorer settings={settings} /> : <main className="dashboard">
+      {view === 'api' ? <ApiExplorer settings={settings} /> : view === 'operator' ? <OperatorDashboard settings={settings} /> : <main className="dashboard">
         <section className="status-strip">
           <div className="status-cell"><span className="status-label">DEVICE</span><span className="status-value"><span className={`device-led ${connected ? 'online' : ''}`} />{settings.baseUrl ? settings.baseUrl.replace(/^https?:\/\//, '') : 'IIH Essentials not configured'}</span></div>
           <span className="strip-divider" />
@@ -375,6 +375,62 @@ function App() {
 
 function MetricCard({ label, value, unit, caption, icon, accent }: { label: string; value: string | number; unit: string; caption: string; icon: ReactNode; accent: string }) {
   return <article className="metric-card"><div className="metric-head"><span>{label}</span><span className={`metric-icon ${accent}`}>{icon}</span></div><div className="metric-reading"><strong>{value}</strong><span>{unit}</span></div><div className="metric-caption">{caption}</div><div className={`metric-line ${accent}`} /></article>;
+}
+
+const OPERATOR_BATCH_ID = 'aa72e1b1-bf4a-473c-981f-d3176248d575';
+
+function OperatorDashboard({ settings }: { settings: ApiSettings }) {
+  const [batches, setBatches] = useState<AnyRecord[]>([]);
+  const [current, setCurrent] = useState<AnyRecord | null>(null);
+  const [previousId, setPreviousId] = useState('');
+  const [previous, setPrevious] = useState<AnyRecord | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let stopped = false;
+    setLoading(true);
+    setError('');
+    Promise.all([
+      apiGet<unknown>(settings.baseUrl, `/DataService/anchor/v1/assets/${encodeURIComponent(OPERATOR_BATCH_ID)}`, settings.credentials),
+      apiGet<unknown>(settings.baseUrl, '/DataService/anchor/v1/assets?take=1000', settings.credentials),
+    ]).then(([currentData, listData]) => {
+      if (stopped) return;
+      const currentRecord = (currentData && typeof currentData === 'object' && !Array.isArray(currentData) ? (currentData as AnyRecord).data ?? currentData : currentData) as AnyRecord;
+      const allBatches = unwrap(listData) as AnyRecord[];
+      const historic = allBatches.filter((item) => idOf(item) && idOf(item) !== OPERATOR_BATCH_ID);
+      setCurrent(currentRecord);
+      setBatches(historic);
+      setPreviousId((selected) => historic.some((item) => idOf(item) === selected) ? selected : idOf(historic[0]));
+    }).catch((reason) => {
+      if (!stopped) setError(reason instanceof Error ? reason.message : 'Could not load batch data from IIH Essentials.');
+    }).finally(() => { if (!stopped) setLoading(false); });
+    return () => { stopped = true; };
+  }, [settings.baseUrl, settings.credentials]);
+
+  useEffect(() => {
+    if (!previousId) { setPrevious(null); return; }
+    let stopped = false;
+    apiGet<unknown>(settings.baseUrl, `/DataService/anchor/v1/assets/${encodeURIComponent(previousId)}`, settings.credentials)
+      .then((data) => { if (!stopped) setPrevious((data && typeof data === 'object' && !Array.isArray(data) ? (data as AnyRecord).data ?? data : data) as AnyRecord); })
+      .catch((reason) => { if (!stopped) setError(reason instanceof Error ? reason.message : 'Could not load the selected batch.'); });
+    return () => { stopped = true; };
+  }, [previousId, settings.baseUrl, settings.credentials]);
+
+  const fieldsFor = (record: AnyRecord | null) => record ? Object.entries(record).filter(([key, value]) => !key.startsWith('$') && !['id', 'anchor', 'relations', 'references'].includes(key) && (typeof value !== 'object' || value === null)).slice(0, 8) : [];
+  const renderBatch = (record: AnyRecord | null, title: string, badge: string, selectable: boolean) => <article className="operator-batch-card">
+    <div className="operator-card-heading"><div><div className="section-kicker">{title}</div><h2>{record ? nameOf(record) : loading ? 'Loading batch…' : 'Batch data unavailable'}</h2></div><span className="operator-batch-badge">{badge}</span></div>
+    {selectable && <label className="operator-batch-select"><span>Previous batch</span><select value={previousId} onChange={(event) => setPreviousId(event.target.value)} disabled={!batches.length}><option value="">{batches.length ? 'Select a batch' : 'No other batches found'}</option>{batches.map((batch) => <option key={idOf(batch)} value={idOf(batch)}>{nameOf(batch)}</option>)}</select><ChevronDown size={14} /></label>}
+    {record ? <><div className="operator-batch-id"><span>Batch ID</span><code>{idOf(record) || (selectable ? previousId : OPERATOR_BATCH_ID)}</code></div><div className="operator-field-grid">{fieldsFor(record).map(([key, value]) => <div className="operator-field" key={key}><span>{key.replace(/([A-Z])/g, ' $1').replace(/[_-]/g, ' ')}</span><b>{typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '—'}</b></div>)}{fieldsFor(record).length === 0 && <div className="operator-fields-empty">Batch is available; no scalar values were returned.</div>}</div></> : <div className="operator-empty">{loading ? 'Connecting to IIH Essentials…' : selectable && !previousId ? 'Choose a batch to review its data.' : 'No batch record returned for this ID.'}</div>}
+  </article>;
+
+  return <main className="operator-page">
+    <div className="operator-page-title"><div><div className="section-kicker">PRODUCTION REVIEW</div><h1>Operator Dashboard</h1><p>Current and previous batch data from IIH Essentials.</p></div><span className="operator-live-tag"><i />{settings.baseUrl.replace(/^https?:\/\//, '')}</span></div>
+    {error && <div className="error-banner"><AlertCircle size={16} /><span>{error}</span></div>}
+    <section className="operator-batch-grid">{renderBatch(current, 'CURRENT BATCH', 'ACTIVE', false)}{renderBatch(previous, 'PREVIOUS BATCH IN REVIEW', `${batches.length} BATCHES`, true)}</section>
+    <section className="operator-detail-grid"><article className="operator-info-card"><div className="section-kicker">CURRENT BATCH</div><h2>Batch record</h2><p>Review process values reported for the active batch. Additional signal and specification IDs can be connected here when provided.</p><div className="operator-info-note"><Activity size={15} /><span>Batch record loaded directly from the IIH Essentials asset API.</span></div></article><article className="operator-info-card"><div className="section-kicker">BATCH REVIEW</div><h2>Selected previous batch</h2><p>{previous ? `Showing ${nameOf(previous)}. Choose another batch from the list above to compare its record.` : 'Select a previous batch to inspect its recorded values.'}</p><div className="operator-info-note"><Clock3 size={15} /><span>Previous batch details update when the selection changes.</span></div></article></section>
+    <footer className="dashboard-footer"><span>Performance Insight <b>·</b> Operator Dashboard</span><span>Source: {settings.baseUrl}</span></footer>
+  </main>;
 }
 
 function MiniChart({ values }: { values: number[] }) {
