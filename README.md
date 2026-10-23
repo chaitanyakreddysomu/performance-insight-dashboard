@@ -15,7 +15,7 @@ The API URL and credential preference are stored in this browser's local storage
 
 ## API Explorer
 
-Open `/api` or choose **API Explorer** in the header to browse all 217 operations in Siemens' IIH Essentials 2.7.0 OpenAPI specification. Expand an endpoint to see its documentation, parameters, and response definition. Safe GET operations with all required parameters available are called when expanded; the response appears in the accordion. Fill missing parameters and choose **Run** when required. Non-GET operations and GET routes that can change data (such as reset, discovery, or deletion) require an explicit run action; DELETE and identified side-effect routes also ask for confirmation.
+Open `/api` or choose **API Explorer** in the header to browse the supported operations in Siemens' IIH Essentials 2.7.0 OpenAPI specification. Deprecated operations are hidden. Expand an endpoint to see its documentation, parameters, and response definition. Safe GET operations with all required parameters available are called when expanded; the response appears in the accordion. Fill missing parameters and choose **Run** when required. Non-GET operations and GET routes that can change data (such as reset, discovery, or deletion) require an explicit run action; DELETE and identified side-effect routes also ask for confirmation.
 
 The catalog is generated from [`src/data/iih-essentials-2.7-openapi.json`](src/data/iih-essentials-2.7-openapi.json) using `node scripts/build-api-catalog.mjs <path-to-openapi.json>`.
 
@@ -32,5 +32,23 @@ Prerequisites: Docker Engine/Desktop and Siemens `iectl`, with a Publisher works
 ```
 
 This builds `performance-insight-dashboard:1.0.0`, applies [`industrial-edge/build-app.yaml`](industrial-edge/build-app.yaml), and exports the `.app` package under `dist/industrial-edge/`. Import that file using Industrial Edge App Publisher or the corresponding IEM import workflow, validate it, and install it on the target device.
+
+### Generate the `.app` from GitHub Actions
+
+Every push to `main` first builds the frontend on a GitHub-hosted runner. The workflow then packages and uploads the `.app` as the `performance-insight-industrial-edge-app` Actions artifact. Pull requests run the frontend build only.
+
+The packaging job requires a Linux x64 self-hosted GitHub Actions runner with Siemens `iectl` and Docker installed. Register it with the labels `self-hosted`, `linux`, `x64`, and `industrial-edge`. On that runner, configure a persistent Publisher workspace and a Docker Engine API at `http://127.0.0.1:2375` (reachable only from the runner host):
+
+```bash
+mkdir -p "$HOME/industrial-edge/performance-insight-workspace"
+iectl config add publisher \
+  --name "performance-insight" \
+  --workspace "$HOME/industrial-edge/performance-insight-workspace" \
+  --dockerurl "http://127.0.0.1:2375"
+```
+
+Install `iectl` from the Industrial Edge Hub's Developer Tools download. The job needs no IEM login; it uses the configured local Publisher workspace to export the standalone app. The workflow assigns each package a unique `1.0.<run number>` version while preserving the app ID in the persistent workspace. Download the artifact from the successful workflow run in the repository's Actions tab.
+
+If that runner is not online, the frontend build still succeeds but the `.app` packaging job waits for a matching runner.
 
 `compose.yaml` is the App Publisher Compose input. The current image build targets the Docker host architecture; build the image for ARM64 and update the Publisher architecture if your target device requires ARM64.
