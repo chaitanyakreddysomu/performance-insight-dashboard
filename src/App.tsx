@@ -417,6 +417,24 @@ function averagePoints(points: Point[]) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined;
 }
 
+function OperatorTrendChart({ title, points, unit, color }: { title: string; points: Point[]; unit: string; color: string }) {
+  const [hoverIndex, setHoverIndex] = useState(-1);
+  const plot = points.map((point, index) => ({ point, index, value: Number(point.value), time: Date.parse(point.timestamp) })).filter((entry) => Number.isFinite(entry.value) && Number.isFinite(entry.time));
+  if (!plot.length) return <div className="operator-trend-card"><div className="operator-trend-title">{title}</div><div className="operator-trend-empty">No readings for this batch interval.</div></div>;
+  const width = 600; const height = 170; const left = 43; const right = 12; const top = 13; const bottom = 27;
+  const minTime = plot[0].time; const maxTime = plot.at(-1)!.time; const minValue = Math.min(...plot.map((entry) => entry.value)); const maxValue = Math.max(...plot.map((entry) => entry.value));
+  const valueSpread = maxValue - minValue || Math.max(Math.abs(maxValue) * .03, 1); const timeSpread = maxTime - minTime || 1;
+  const coordinates = plot.map((entry) => ({ x: left + ((entry.time - minTime) / timeSpread) * (width - left - right), y: top + (1 - (entry.value - minValue) / valueSpread) * (height - top - bottom), ...entry }));
+  const activeIndex = Math.max(0, Math.min(hoverIndex, coordinates.length - 1)); const active = coordinates[activeIndex];
+  return <div className="operator-trend-card"><div className="operator-trend-title">{title}<span>{plot.length} readings</span></div><svg className="operator-trend-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${title} over batch time`} onMouseMove={(event) => { const bounds = event.currentTarget.getBoundingClientRect(); const chartX = ((event.clientX - bounds.left) / bounds.width) * width; const ratio = Math.max(0, Math.min(1, (chartX - left) / (width - left - right))); const targetTime = minTime + ratio * timeSpread; let nearest = 0; let delta = Infinity; coordinates.forEach((coordinate, index) => { const next = Math.abs(coordinate.time - targetTime); if (next < delta) { nearest = index; delta = next; } }); setHoverIndex(nearest); }} onMouseLeave={() => setHoverIndex(-1)}>
+    {[0, 1, 2, 3].map((step) => { const y = top + step * ((height - top - bottom) / 3); const value = maxValue - step * (valueSpread / 3); return <g key={step}><line x1={left} x2={width - right} y1={y} y2={y} className="operator-chart-gridline" /><text x={left - 7} y={y + 3} textAnchor="end" className="operator-chart-axis">{value.toLocaleString(undefined, { maximumFractionDigits: 2 })}</text></g>; })}
+    <polyline points={coordinates.map(({ x, y }) => `${x},${y}`).join(' ')} fill="none" stroke={color} strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    {coordinates.length === 1 && <circle cx={coordinates[0].x} cy={coordinates[0].y} r="4" fill={color} />}
+    {hoverIndex >= 0 && <><line x1={active.x} x2={active.x} y1={top} y2={height - bottom} className="operator-chart-cursor" /><circle cx={active.x} cy={active.y} r="5" fill={color} stroke="white" strokeWidth="2" /></>}
+    <text x={left} y={height - 7} className="operator-chart-axis">{formatTime(new Date(minTime).toISOString())}</text><text x={width - right} y={height - 7} textAnchor="end" className="operator-chart-axis">{formatTime(new Date(maxTime).toISOString())}</text>
+  </svg><div className="operator-trend-tooltip">{hoverIndex >= 0 ? <><b>{active.value.toLocaleString(undefined, { maximumFractionDigits: 3 })} {unit}</b><span>{new Date(active.time).toLocaleString()}</span></> : <span>Hover over the line to inspect a value and timestamp</span>}</div></div>;
+}
+
 function OperatorDashboard({ settings }: { settings: ApiSettings }) {
   const [batchHistory, setBatchHistory] = useState<BatchEvent[]>([]);
   const [selectedBatchIndex, setSelectedBatchIndex] = useState(-1);
@@ -424,6 +442,8 @@ function OperatorDashboard({ settings }: { settings: ApiSettings }) {
   const [temperatureSignal, setTemperatureSignal] = useState<OperatorSignal | null>(null);
   const [liveReadings, setLiveReadings] = useState<Record<string, number>>({});
   const [previousAverages, setPreviousAverages] = useState<Record<string, number>>({});
+  const [batchSeries, setBatchSeries] = useState<Record<string, Point[]>>({});
+  const [chartBatchChoice, setChartBatchChoice] = useState<'previous' | 'selected'>('previous');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -455,10 +475,15 @@ function OperatorDashboard({ settings }: { settings: ApiSettings }) {
   useEffect(() => {
     const selected = batchHistory[selectedBatchIndex];
     const previous = batchHistory[selectedBatchIndex - 1];
-    if (!selected || !previous || !rpmSignal && !temperatureSignal) { setPreviousAverages({}); return; }
+    if (!selected || !rpmSignal && !temperatureSignal) { setPreviousAverages({}); setBatchSeries({}); return; }
     let stopped = false;
-    Promise.all([rpmSignal, temperatureSignal].filter((signal): signal is OperatorSignal => Boolean(signal)).map((signal) => readOperatorHistory(settings, signal.id, previous.timestamp, selected.timestamp)))
-      .then((results) => { if (!stopped) { const next: Record<string, number> = {}; [rpmSignal, temperatureSignal].filter((signal): signal is OperatorSignal => Boolean(signal)).forEach((signal, index) => { const average = averagePoints(results[index] ?? []); if (average !== undefined) next[signal.id] = average; }); setPreviousAverages(next); } })
+    const signals = [rpmSignal, temperatureSignal].filter((signal): signal is OperatorSignal => Boolean(signal));
+    const windows = [
+      ...(previous ? [{ key: 'previous', start: previous.timestamp, end: selected.timestamp }] : []),
+      { key: 'selected', start: selected.timestamp, end: batchHistory[selectedBatchIndex + 1]?.timestamp ?? new Date().toISOString() },
+    ];
+    Promise.all(windows.flatMap((window) => signals.map(async (signal) => ({ key: `${window.key}:${signal.id}`, signal, points: await readOperatorHistory(settings, signal.id, window.start, window.end) }))))
+      .then((results) => { if (!stopped) { const next: Record<string, number> = {}; const series: Record<string, Point[]> = {}; for (const result of results) { series[result.key] = result.points; if (result.key.startsWith('previous:')) { const average = averagePoints(result.points); if (average !== undefined) next[result.signal.id] = average; } } setPreviousAverages(next); setBatchSeries(series); } })
       .catch((reason) => { if (!stopped) setError(reason instanceof Error ? reason.message : 'Could not load the selected batch history.'); });
     return () => { stopped = true; };
   }, [batchHistory, selectedBatchIndex, rpmSignal, temperatureSignal, settings.baseUrl, settings.credentials]);
@@ -473,16 +498,18 @@ function OperatorDashboard({ settings }: { settings: ApiSettings }) {
       const from = new Date(to.getTime() - 10_000);
       try {
         const results = await Promise.all(signals.map((signal) => readOperatorHistory(settings, signal.id, from.toISOString(), to.toISOString())));
-        if (!stopped) { const next: Record<string, number> = {}; signals.forEach((signal, index) => { const latest = results[index]?.at(-1); const value = Number(latest?.value); if (Number.isFinite(value)) next[signal.id] = value; }); setLiveReadings(next); }
+        if (!stopped) { const next: Record<string, number> = {}; signals.forEach((signal, index) => { const latest = results[index]?.at(-1); const value = Number(latest?.value); if (Number.isFinite(value)) next[signal.id] = value; }); setLiveReadings(next); if (selectedBatchIndex === batchHistory.length - 1) setBatchSeries((current) => { const merged = { ...current }; signals.forEach((signal, index) => { const key = `selected:${signal.id}`; const byPoint = new Map<string, Point>(); for (const point of [...(current[key] ?? []), ...(results[index] ?? [])]) byPoint.set(`${point.timestamp}:${point.value}`, point); merged[key] = [...byPoint.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp)).slice(-2000); }); return merged; }); }
       } catch (reason) { if (!stopped) setError(reason instanceof Error ? reason.message : 'Unable to refresh RPM and temperature.'); }
       if (!stopped) timer = window.setTimeout(() => void refresh(), 1000);
     };
     timer = window.setTimeout(() => void refresh(), 1000);
     return () => { stopped = true; window.clearTimeout(timer); };
-  }, [rpmSignal, temperatureSignal, settings.baseUrl, settings.credentials]);
+  }, [rpmSignal, temperatureSignal, selectedBatchIndex, batchHistory.length, settings.baseUrl, settings.credentials]);
 
   const currentEvent = batchHistory.at(-1);
   const lastBatch = batchHistory[selectedBatchIndex - 1];
+  const chartBatch = chartBatchChoice === 'previous' ? lastBatch : batchHistory[selectedBatchIndex];
+  const chartBatchKey = chartBatchChoice === 'previous' ? 'previous' : 'selected';
   const liveValue = (signal: OperatorSignal | null) => signal ? liveReadings[signal.id] : undefined;
   const formatMetric = (value: number | undefined) => value === undefined ? '—' : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
@@ -491,7 +518,7 @@ function OperatorDashboard({ settings }: { settings: ApiSettings }) {
     {error && <div className="error-banner"><AlertCircle size={16} /><span>{error}</span></div>}
     <section className="operator-review-grid">
       <article className="operator-review-card"><div className="operator-review-heading"><div><b>Current shift in review</b><span>Live process readings</span></div><span className="operator-batch-badge">{currentEvent?.label ?? 'Current batch'}</span></div><div className="operator-live-metrics"><div><span>{rpmSignal?.name ?? 'RPM'}</span><strong>{formatMetric(liveValue(rpmSignal))}</strong><small>{rpmSignal?.unit || 'rpm'} · live</small></div><div><span>{temperatureSignal?.name ?? 'Temperature'}</span><strong>{formatMetric(liveValue(temperatureSignal))}</strong><small>{temperatureSignal?.unit || '°C'} · live</small></div></div></article>
-      <article className="operator-review-card"><div className="operator-review-heading"><div><b>Last batch in review</b><span>{lastBatch ? `${lastBatch.label} · ${formatTime(lastBatch.timestamp)}` : 'Average RPM and temperature'}</span></div><label className="operator-batch-select"><select aria-label="Choose a batch to review its predecessor" value={selectedBatchIndex} onChange={(event) => setSelectedBatchIndex(Number(event.target.value))} disabled={batchHistory.length < 2}><option value={-1}>Select batch</option>{batchHistory.map((event, index) => <option key={`${event.timestamp}-${index}`} value={index}>{event.label}</option>)}</select><ChevronDown size={13} /></label></div><div className="operator-live-metrics"><div><span>Average RPM</span><strong>{rpmSignal ? formatMetric(previousAverages[rpmSignal.id]) : '—'}</strong><small>{rpmSignal?.unit || 'rpm'} · {lastBatch ? lastBatch.label : 'previous batch'}</small></div><div><span>Average temperature</span><strong>{temperatureSignal ? formatMetric(previousAverages[temperatureSignal.id]) : '—'}</strong><small>{temperatureSignal?.unit || '°C'} · {lastBatch ? lastBatch.label : 'previous batch'}</small></div></div><div className="operator-batch-select-help">Select a batch to review the batch immediately before it.</div></article>
+      <article className="operator-review-card operator-history-card"><div className="operator-review-heading"><div><b>Last batch in review</b><span>{lastBatch ? `${lastBatch.label} · ${formatTime(lastBatch.timestamp)}` : 'Average RPM and temperature'}</span></div><label className="operator-batch-select"><select aria-label="Choose a batch to review its predecessor" value={selectedBatchIndex} onChange={(event) => setSelectedBatchIndex(Number(event.target.value))} disabled={batchHistory.length < 2}><option value={-1}>Select batch</option>{batchHistory.map((event, index) => <option key={`${event.timestamp}-${index}`} value={index}>{event.label}</option>)}</select><ChevronDown size={13} /></label></div><div className="operator-live-metrics"><div><span>Average RPM</span><strong>{rpmSignal ? formatMetric(previousAverages[rpmSignal.id]) : '—'}</strong><small>{rpmSignal?.unit || 'rpm'} · {lastBatch ? lastBatch.label : 'previous batch'}</small></div><div><span>Average temperature</span><strong>{temperatureSignal ? formatMetric(previousAverages[temperatureSignal.id]) : '—'}</strong><small>{temperatureSignal?.unit || '°C'} · {lastBatch ? lastBatch.label : 'previous batch'}</small></div></div><div className="operator-batch-select-help">Select a batch to review the batch immediately before it.</div><div className="operator-chart-toolbar"><span>Batch trends · {chartBatch?.label ?? '—'}</span><div><button className={chartBatchChoice === 'previous' ? 'selected' : ''} onClick={() => setChartBatchChoice('previous')} disabled={!lastBatch}>Previous batch</button><button className={chartBatchChoice === 'selected' ? 'selected' : ''} onClick={() => setChartBatchChoice('selected')} disabled={!batchHistory[selectedBatchIndex]}>Selected batch</button></div></div><div className="operator-batch-trends">{rpmSignal && <OperatorTrendChart title="RPM" points={batchSeries[`${chartBatchKey}:${rpmSignal.id}`] ?? []} unit={rpmSignal.unit || 'rpm'} color="#4077ed" />}{temperatureSignal && <OperatorTrendChart title="Temperature" points={batchSeries[`${chartBatchKey}:${temperatureSignal.id}`] ?? []} unit={temperatureSignal.unit || '°C'} color="#00966c" />}{!rpmSignal && !temperatureSignal && <div className="operator-trend-empty">RPM and temperature signals were not found in IIH Essentials.</div>}</div></article>
     </section>
     <section className="operator-quality-grid"><article className="operator-quality-card"><div className="operator-review-heading"><b>Viscosity</b><span className="operator-batch-badge">Previous batch {lastBatch?.label ?? '—'}</span></div><div className="operator-quality-values"><div><span>Predicted</span><strong className="predicted-value">—</strong><small>cPs (MAE, last 100)</small></div><div><span>Actual (lab)</span><strong>—</strong><small>Operator entered</small></div><div><span>Spec (LSL - USL)</span><strong className="spec-value">Awaiting IDs</strong><small>cPs</small></div></div><div className="operator-quality-placeholder">Provide the viscosity signal and specification IDs to display batch predictions and lab results.</div></article><article className="operator-quality-card"><div className="operator-review-heading"><b>pH</b><span className="operator-batch-badge">Previous batch {lastBatch?.label ?? '—'}</span></div><div className="operator-quality-values"><div><span>Predicted</span><strong className="predicted-value">—</strong><small>MAE, last 100</small></div><div><span>Actual (lab)</span><strong>—</strong><small>Operator entered</small></div><div><span>Spec (LSL - USL)</span><strong className="spec-value">Awaiting IDs</strong><small>pH</small></div></div><div className="operator-quality-placeholder">Provide the pH signal and specification IDs to display batch predictions and lab results.</div></article></section>
     <footer className="operator-note">Batch history comes from the configured IIH time-series attribute. Selecting a batch shows RPM and temperature averages from the preceding batch interval.</footer>
