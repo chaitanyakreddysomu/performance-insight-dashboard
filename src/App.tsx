@@ -417,19 +417,61 @@ function OperatorDashboard({ settings }: { settings: ApiSettings }) {
     return () => { stopped = true; };
   }, [previousId, settings.baseUrl, settings.credentials]);
 
-  const fieldsFor = (record: AnyRecord | null) => record ? Object.entries(record).filter(([key, value]) => !key.startsWith('$') && !['id', 'anchor', 'relations', 'references'].includes(key) && (typeof value !== 'object' || value === null)).slice(0, 8) : [];
-  const renderBatch = (record: AnyRecord | null, title: string, badge: string, selectable: boolean) => <article className="operator-batch-card">
-    <div className="operator-card-heading"><div><div className="section-kicker">{title}</div><h2>{record ? nameOf(record) : loading ? 'Loading batch…' : 'Batch data unavailable'}</h2></div><span className="operator-batch-badge">{badge}</span></div>
-    {selectable && <label className="operator-batch-select"><span>Previous batch</span><select value={previousId} onChange={(event) => setPreviousId(event.target.value)} disabled={!batches.length}><option value="">{batches.length ? 'Select a batch' : 'No other batches found'}</option>{batches.map((batch) => <option key={idOf(batch)} value={idOf(batch)}>{nameOf(batch)}</option>)}</select><ChevronDown size={14} /></label>}
-    {record ? <><div className="operator-batch-id"><span>Batch ID</span><code>{idOf(record) || (selectable ? previousId : OPERATOR_BATCH_ID)}</code></div><div className="operator-field-grid">{fieldsFor(record).map(([key, value]) => <div className="operator-field" key={key}><span>{key.replace(/([A-Z])/g, ' $1').replace(/[_-]/g, ' ')}</span><b>{typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '—'}</b></div>)}{fieldsFor(record).length === 0 && <div className="operator-fields-empty">Batch is available; no scalar values were returned.</div>}</div></> : <div className="operator-empty">{loading ? 'Connecting to IIH Essentials…' : selectable && !previousId ? 'Choose a batch to review its data.' : 'No batch record returned for this ID.'}</div>}
-  </article>;
+  const fields = (record: AnyRecord | null): Record<string, unknown> => {
+    const result: Record<string, unknown> = {};
+    const visit = (value: unknown, prefix = '', depth = 0) => {
+      if (!value || typeof value !== 'object' || depth > 3) return;
+      for (const [key, child] of Object.entries(value as AnyRecord)) {
+        const path = prefix ? `${prefix}.${key}` : key;
+        if (child === null || ['string', 'number', 'boolean'].includes(typeof child)) result[path] = child;
+        else if (typeof child === 'object' && !Array.isArray(child)) visit(child, path, depth + 1);
+      }
+    };
+    if (record) visit(record);
+    return result;
+  };
+  const valueFor = (record: AnyRecord | null, ...names: string[]) => {
+    const entries = Object.entries(fields(record));
+    for (const name of names) {
+      const found = entries.find(([key]) => key.toLowerCase().replace(/[^a-z0-9]/g, '').endsWith(name.toLowerCase().replace(/[^a-z0-9]/g, '')));
+      if (found) return found[1];
+    }
+    return undefined;
+  };
+  const displayValue = (value: unknown, digits = 2) => {
+    if (value === undefined || value === null || value === '') return '—';
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toLocaleString(undefined, { maximumFractionDigits: digits }) : String(value);
+  };
+  const materialFields = [['Salt (kg)', ['salt', 'saltKg']], ['Citric (kg)', ['citric', 'citricKg']], ['Caustic (kg)', ['caustic', 'causticKg']], ['Water (kg)', ['water', 'waterKg']]] as const;
+  const batchTitle = current ? nameOf(current) : loading ? 'Loading…' : '—';
+  const shiftBatchCount = batches.length + (current ? 1 : 0);
 
   return <main className="operator-page">
-    <div className="operator-page-title"><div><div className="section-kicker">PRODUCTION REVIEW</div><h1>Operator Dashboard</h1><p>Current and previous batch data from IIH Essentials.</p></div><span className="operator-live-tag"><i />{settings.baseUrl.replace(/^https?:\/\//, '')}</span></div>
+    <div className="operator-brandbar"><div><b>Intelligent Mixer — Operator Dashboard</b><span>Amil · Mixer 3 · Surflex Top Load Ecoboost</span></div><div className="operator-shift">Shift B&nbsp; | &nbsp;{new Date().toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div></div>
+    <div className="operator-current-strip"><div><span>Current batch</span><b>{batchTitle}</b></div><span>Mode: <b>{String(valueFor(current, 'mode') ?? 'AUTO')}</b></span><span>Elapsed: <b>{String(valueFor(current, 'elapsed', 'elapsedTime') ?? '—')}</b></span><b className="operator-step">Step: {String(valueFor(current, 'step', 'currentStep') ?? 'Batch data loaded — awaiting process values')}</b><span className="prediction-ready">PREDICTION READY</span></div>
     {error && <div className="error-banner"><AlertCircle size={16} /><span>{error}</span></div>}
-    <section className="operator-batch-grid">{renderBatch(current, 'CURRENT BATCH', 'ACTIVE', false)}{renderBatch(previous, 'PREVIOUS BATCH IN REVIEW', `${batches.length} BATCHES`, true)}</section>
-    <section className="operator-detail-grid"><article className="operator-info-card"><div className="section-kicker">CURRENT BATCH</div><h2>Batch record</h2><p>Review process values reported for the active batch. Additional signal and specification IDs can be connected here when provided.</p><div className="operator-info-note"><Activity size={15} /><span>Batch record loaded directly from the IIH Essentials asset API.</span></div></article><article className="operator-info-card"><div className="section-kicker">BATCH REVIEW</div><h2>Selected previous batch</h2><p>{previous ? `Showing ${nameOf(previous)}. Choose another batch from the list above to compare its record.` : 'Select a previous batch to inspect its recorded values.'}</p><div className="operator-info-note"><Clock3 size={15} /><span>Previous batch details update when the selection changes.</span></div></article></section>
-    <footer className="dashboard-footer"><span>Performance Insight <b>·</b> Operator Dashboard</span><span>Source: {settings.baseUrl}</span></footer>
+    <section className="operator-review-grid">
+      <article className="operator-review-card"><div className="operator-review-heading"><div><b>Last batch in review</b><span>Batch cycle time</span></div><span className="operator-batch-badge">{previous ? nameOf(previous) : '—'}</span></div><div className="operator-two-metrics"><div><strong>{displayValue(valueFor(previous, 'cycleTime', 'batchCycleTime'), 0)}</strong><small>min</small><span>Standard 55 min</span></div><div><span className="review-metric-label">Correction time loss</span><strong className="danger-value">{displayValue(valueFor(previous, 'correctionTimeLoss', 'correctionTime'), 1)}</strong><small>min</small><span>Time from pH/visc check to enzyme</span></div></div><div className="operator-material-label">Material corrections (this batch)</div><div className="operator-material-grid">{materialFields.map(([label, keys]) => <div key={label}><b>{displayValue(valueFor(previous, ...keys), 0)}</b><span>{label}</span></div>)}</div></article>
+      <article className="operator-review-card"><div className="operator-review-heading"><div><b>Current shift in review</b><span>Batch cycle time</span></div><label className="operator-batch-select"><select aria-label="Select previous batch" value={previousId} onChange={(event) => setPreviousId(event.target.value)} disabled={!batches.length}><option value="">Select batch</option>{batches.map((batch) => <option key={idOf(batch)} value={idOf(batch)}>{nameOf(batch)}</option>)}</select><ChevronDown size={13} /></label></div><div className="operator-two-metrics"><div><strong>{displayValue(valueFor(current, 'cycleTime', 'batchCycleTime'), 0)}</strong><small>min</small><span>Avg · Standard 55 min</span></div><div><span className="review-metric-label">Correction time loss</span><strong className="warning-value">{displayValue(valueFor(current, 'correctionTimeLoss', 'correctionTime'), 1)}</strong><small>min</small><span>Selected batch · {shiftBatchCount} batches in review</span></div></div><div className="operator-material-label">Total material corrections (shift)</div><div className="operator-material-grid">{materialFields.map(([label, keys]) => <div key={label}><b>{displayValue(valueFor(current, ...keys), 0)}</b><span>{label}</span></div>)}</div></article>
+    </section>
+    <section className="operator-quality-grid">
+      {([['Viscosity', 'viscosity', 'viscosityPredicted', 'viscosityActual', 'viscosityLsl', 'viscosityUsl', 'cPs'], ['pH', 'pH', 'pHPredicted', 'pHActual', 'pHLsl', 'pHUsl', '']] as const).map(([title, key, predictedKey, actualKey, lslKey, uslKey, unit]) => {
+        const predicted = valueFor(current, predictedKey, key);
+        const actual = valueFor(current, actualKey);
+        const lsl = valueFor(current, lslKey);
+        const usl = valueFor(current, uslKey);
+        const numericPredicted = Number(predicted);
+        const numericActual = Number(actual);
+        const deviation = Number.isFinite(numericPredicted) && Number.isFinite(numericActual) ? Math.abs(numericPredicted - numericActual) : undefined;
+        const confidence = deviation === undefined ? '—' : `${displayValue(deviation, 2)} ${unit}`;
+        const isGood = deviation !== undefined && deviation <= Math.max(Math.abs(numericActual) * .03, .01);
+        return <article className="operator-quality-card" key={title}><div className="operator-review-heading"><b>{title}</b><span className="operator-batch-badge">Current batch {batchTitle}</span></div><div className="operator-quality-values"><div><span>Predicted</span><strong className="predicted-value">{displayValue(predicted, title === 'pH' ? 2 : 0)}</strong><small>{unit || 'operator reading'}</small></div><div><span>Actual (lab)</span><strong>{displayValue(actual, title === 'pH' ? 2 : 0)}</strong><small>Operator entered</small></div><div><span>Spec (LSL - USL)</span><strong className="spec-value">{displayValue(lsl)} – {displayValue(usl)}</strong></div></div>
+          <div className="operator-spec-caption">Position against specification</div><div className="operator-spec-track"><div className="operator-spec-window" /><span className="operator-spec-dot actual" /><span className="operator-spec-dot predicted" /></div><div className="operator-spec-ends"><span>LSL {displayValue(lsl)}</span><span>USL {displayValue(usl)}</span></div><div className="operator-confidence"><div className="operator-gauge-wrap"><div className="operator-gauge"><i /></div><div className="operator-gauge-reading">{deviation === undefined ? 'Awaiting data' : `${confidence} · ${isGood ? 'within range' : 'review'}`}</div><span>Prediction error for this batch</span></div><div className="operator-recommendation"><b>Recommendation</b><strong className={isGood ? 'clear' : 'verify'}>{deviation === undefined ? 'AWAITING BATCH DATA' : isGood ? 'CLEAR ON PREDICTION' : 'VERIFY WITH LAB'}</strong><p>{deviation === undefined ? 'Predicted and lab values will appear when the batch signal IDs are configured.' : isGood ? 'Prediction is within the expected range. No correction needed.' : 'Prediction differs from the lab value. Confirm with lab before clearing.'}</p></div></div>
+        </article>;
+      })}
+    </section>
+    <footer className="operator-note">Gauge zones are indicative. Prediction and specification values display from the selected IIH batch record when present.</footer>
   </main>;
 }
 
