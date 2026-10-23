@@ -247,6 +247,59 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    const signalIds = signals.map(idOf).filter(Boolean).slice(0, 100);
+    if (!signalIds.length || !settings.baseUrl) return;
+
+    let stopped = false;
+    let timer: number | undefined;
+    const refreshSignalData = async () => {
+      const to = new Date();
+      const from = new Date(to.getTime() - 10 * 1000);
+      const params = new URLSearchParams({
+        variableIds: signalIds.join(','),
+        from: from.toISOString(),
+        to: to.toISOString(),
+        limit: '100',
+      });
+
+      try {
+        const result = await apiGet<unknown>(settings.baseUrl, `/DataService/Data?${params}`, settings.credentials);
+        const updates = unwrap(result) as AnyRecord[];
+        if (!stopped) {
+          setSeries((current) => {
+            const next = { ...current };
+            for (const item of updates) {
+              const id = item.variableId ?? item.id;
+              if (!id) continue;
+              const byPoint = new Map<string, Point>();
+              for (const point of [...(current[id] ?? []), ...(item.values ?? [])] as Point[]) {
+                const key = `${point.timestamp ?? ''}:${point.value}:${point.qualitycode ?? ''}`;
+                byPoint.set(key, point);
+              }
+              next[id] = [...byPoint.values()]
+                .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+                .slice(-2000);
+            }
+            return next;
+          });
+          setLastUpdated(new Date());
+          setError('');
+        }
+      } catch (reason) {
+        if (!stopped) setError(reason instanceof Error ? reason.message : 'Unable to refresh signal data.');
+      }
+
+      if (!stopped) timer = window.setTimeout(() => void refreshSignalData(), 1000);
+    };
+
+    timer = window.setTimeout(() => void refreshSignalData(), 1000);
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [signals, settings.baseUrl, settings.credentials]);
+
   useEffect(() => { if (settings.baseUrl) void loadDashboard(); /* restore saved device on first render */ // eslint-disable-line react-hooks/exhaustive-deps
   }, []);
 
@@ -279,6 +332,8 @@ function App() {
           <div className="status-cell"><span className="status-label">ASSETS</span><span className="status-value">{assets.length || '—'}</span></div>
           <span className="strip-divider" />
           <div className="status-cell"><span className="status-label">SIGNALS</span><span className="status-value">{signals.length || '—'}</span></div>
+          <span className="strip-divider" />
+          <div className="status-cell"><span className="status-label">AUTO REFRESH</span><span className="status-value">Every second</span></div>
           <div className="status-spacer" />
           <label className="range-picker"><span>RANGE</span><select value={rangeHours} onChange={(event) => { const next = Number(event.target.value); setRangeHours(next); if (connected) void loadSeries(settings, signals, next); }}><option value={1}>Last hour</option><option value={24}>Last 24 hours</option><option value={168}>Last 7 days</option></select><ChevronDown size={14} /></label>
           <button className="refresh-button" onClick={() => void loadDashboard()} disabled={connection === 'connecting'}><RefreshCw size={14} className={connection === 'connecting' ? 'spin' : ''} />Refresh</button>
@@ -304,7 +359,7 @@ function App() {
           <article className="panel signals-panel"><div className="panel-heading"><div><div className="section-kicker">PROCESS DATA</div><h2>Signal monitor</h2><p>Live values from IIH Essentials</p></div><div className="table-actions"><label className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search signals" /></label><button className="outline-button" onClick={() => void loadSeries()}><RefreshCw size={13} /> Update</button></div></div><div className="table-scroll"><table><thead><tr><th>SIGNAL</th><th>ASSET</th><th>LATEST VALUE</th><th>UNIT</th><th>QUALITY</th><th>LAST UPDATE</th><th /></tr></thead><tbody>{filteredSignals.slice(0, 60).map((signal) => {
             const signalId = idOf(signal); const data = series[signalId] ?? []; const last = data.at(-1); const assetId = signal.assetId ?? signal.asset?.id ?? signal.parentId; const assetName = assets.find((asset) => idOf(asset) === assetId)?.name ?? signal.assetName ?? '—'; const selected = idOf(activeSignal) === signalId;
             return <tr key={signalId} className={selected ? 'selected-row' : ''} onClick={() => setSelectedSignal(signalId)}><td><span className="signal-cell"><span className="signal-badge"><Activity size={13} /></span><b>{nameOf(signal)}</b></span></td><td>{assetName}</td><td className="value-cell">{last ? Number(last.value).toLocaleString() : '—'}</td><td>{signal.unit || '—'}</td><td><span className={`quality-chip ${last && Number(last.qualitycode ?? 192) >= 192 ? 'good' : last ? 'poor' : ''}`}><i />{last ? Number(last.qualitycode ?? 192) >= 192 ? 'Good' : `Code ${last.qualitycode}` : 'No data'}</span></td><td>{last ? formatTime(last.timestamp) : '—'}</td><td><button className="row-arrow" onClick={(event) => { event.stopPropagation(); setSelectedSignal(signalId); }} aria-label={`Select ${nameOf(signal)}`}><ChevronRight size={16} /></button></td></tr>;
-          })}{filteredSignals.length === 0 && <tr><td className="empty-cell" colSpan={7}>{connected ? 'No signals found. Check that IIH Essentials has variables configured.' : 'Connect to IIH Essentials to load your process signals.'}</td></tr>}</tbody></table></div><div className="table-foot"><span>Showing {Math.min(filteredSignals.length, 60)} of {filteredSignals.length} signals</span><span>Refreshes when you select Update</span></div></article>
+          })}{filteredSignals.length === 0 && <tr><td className="empty-cell" colSpan={7}>{connected ? 'No signals found. Check that IIH Essentials has variables configured.' : 'Connect to IIH Essentials to load your process signals.'}</td></tr>}</tbody></table></div><div className="table-foot"><span>Showing {Math.min(filteredSignals.length, 60)} of {filteredSignals.length} signals</span><span>Loaded signals refresh every second</span></div></article>
           <article className="panel assets-panel"><div className="panel-heading"><div><div className="section-kicker">EQUIPMENT</div><h2>Asset hierarchy</h2><p>{assets.length} assets available</p></div><button className="outline-icon" title="Refresh assets" onClick={() => void loadDashboard()}><RefreshCw size={14} /></button></div><div className="asset-list">{assets.slice(0, 9).map((asset) => {
             const assetId = idOf(asset); const count = signals.filter((signal) => (signal.assetId ?? signal.asset?.id ?? signal.parentId) === assetId).length;
             return <button className="asset-item" key={assetId} onClick={() => { const match = signals.find((signal) => (signal.assetId ?? signal.asset?.id ?? signal.parentId) === assetId); if (match) setSelectedSignal(idOf(match)); setSearch(nameOf(asset)); }}><span className="asset-icon"><Factory size={15} /></span><span className="asset-label"><b>{nameOf(asset)}</b><small>{asset.type ?? asset.assetType ?? 'Production asset'}</small></span><span className="asset-count">{count}<small>signals</small></span><ChevronRight size={15} className="asset-chevron" /></button>;
