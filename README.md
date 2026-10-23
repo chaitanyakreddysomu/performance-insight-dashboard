@@ -35,7 +35,7 @@ This builds `performance-insight-dashboard:1.0.0`, applies [`industrial-edge/bui
 
 ### Generate the `.app` from GitHub Actions
 
-Every push to `main` runs a single workflow that builds the frontend, builds the Docker image, exports the `.app` into `exports/`, and uploads it as the `performance-insight-industrial-edge-app` Actions artifact. Version tags (`v*`) and manual runs use the same flow.
+Every push to `main` runs a single workflow that builds the frontend, builds the Docker image, exports the `.app` into `exports/`, and uploads it as the `performance-insight-industrial-edge-app` Actions artifact. Version tags (`v*`) and manual runs use the same flow. The dashboard container exposes device port `38080` and maps it to Nginx port `80`.
 
 The workflow requires a Linux x64 self-hosted GitHub Actions runner with Siemens `iectl` and Docker installed. Register it with the default labels `self-hosted`, `linux`, and `x64`; it no longer requires the extra custom `industrial-edge` label. On that runner, configure a persistent Publisher workspace and a Docker Engine API at `http://127.0.0.1:2375` (reachable only from the runner host):
 

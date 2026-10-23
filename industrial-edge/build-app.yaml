@@ -1,7 +1,7 @@
 variables:
   appname: "Performance Insight Dashboard"
   reponame: "performance-insight-dashboard"
-  version: "1.0.0"
+  version: "1.0.1"
   redirectsection: "dashboard"
   redirecturl: "80"
   exportpath: "./exports"

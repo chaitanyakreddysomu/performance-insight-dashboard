@@ -4,6 +4,8 @@ services:
     image: performance-insight-dashboard:1.0.0
     restart: always
     mem_limit: 128m
+    ports:
+      - "38080:80"
     networks:
       - proxy-redirect
 
