@@ -378,35 +378,52 @@ function MetricCard({ label, value, unit, caption, icon, accent }: { label: stri
 }
 
 const OPERATOR_BATCH_ID = 'aa72e1b1-bf4a-473c-981f-d3176248d575';
+type BatchEvent = { value: string; timestamp: string; label: string };
+type OperatorSignal = { id: string; name: string; unit: string };
 
-async function loadOperatorEntity(settings: ApiSettings, entityId: string): Promise<AnyRecord | null> {
-  const encoded = encodeURIComponent(entityId);
-  const candidates = [
-    `/DataService/anchor/v1/assets/${encoded}`,
-    `/DataService/anchor-ex/v1/treeitems/${encoded}/entity`,
-    `/DataService/anchor-ex/v1/treeitems/${encoded}`,
-    `/DataService/anchor-ex/v1/attributes/${encoded}`,
-    `/DataService/anchor/v1/attributes/${encoded}`,
-    `/DataService/anchor/v1/metadata/${encoded}`,
-  ];
-  for (const path of candidates) {
-    try {
-      const data = await apiGet<unknown>(settings.baseUrl, path, settings.credentials);
-      const record = data && typeof data === 'object' && !Array.isArray(data) ? ((data as AnyRecord).data ?? data) : data;
-      if (record && typeof record === 'object' && !Array.isArray(record)) return record as AnyRecord;
-    } catch {
-      // The supplied batch ID can refer to an asset, tree item, or attribute.
-      // Try the next supported IIH resource type when one returns 404.
-    }
+async function readOperatorHistory(settings: ApiSettings, variableId: string, from = 'null', to = 'null'): Promise<Point[]> {
+  const points: Point[] = [];
+  let pageFrom = from;
+  const seenPages = new Set<string>();
+  while (!seenPages.has(pageFrom)) {
+    seenPages.add(pageFrom);
+    const params = new URLSearchParams({ variableIds: variableId, from: pageFrom, to, limit: '2000', order: 'Ascending' });
+    const result = await apiGet<AnyRecord>(settings.baseUrl, `/DataService/Data?${params}`, settings.credentials);
+    const items = unwrap(result) as AnyRecord[];
+    const item = items.find((entry) => (entry.variableId ?? entry.id) === variableId) ?? items[0];
+    points.push(...((item?.values ?? []) as Point[]));
+    const nextFrom = result?.hasMoreData?.from;
+    if (!nextFrom || seenPages.has(nextFrom)) break;
+    pageFrom = nextFrom;
   }
-  return null;
+  return points.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+}
+
+function toBatchEvents(points: Point[]): BatchEvent[] {
+  const events: BatchEvent[] = [];
+  let previous = '';
+  for (const point of points) {
+    const value = String(point.value ?? '').trim();
+    if (!value || value === previous) continue;
+    previous = value;
+    const label = /^\d+$/.test(value) ? `Batch ${value}` : value;
+    events.push({ value, timestamp: point.timestamp, label });
+  }
+  return events;
+}
+
+function averagePoints(points: Point[]) {
+  const values = points.map((point) => Number(point.value)).filter(Number.isFinite);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined;
 }
 
 function OperatorDashboard({ settings }: { settings: ApiSettings }) {
-  const [batches, setBatches] = useState<AnyRecord[]>([]);
-  const [current, setCurrent] = useState<AnyRecord | null>(null);
-  const [previousId, setPreviousId] = useState('');
-  const [previous, setPrevious] = useState<AnyRecord | null>(null);
+  const [batchHistory, setBatchHistory] = useState<BatchEvent[]>([]);
+  const [selectedBatchIndex, setSelectedBatchIndex] = useState(-1);
+  const [rpmSignal, setRpmSignal] = useState<OperatorSignal | null>(null);
+  const [temperatureSignal, setTemperatureSignal] = useState<OperatorSignal | null>(null);
+  const [liveReadings, setLiveReadings] = useState<Record<string, number>>({});
+  const [previousAverages, setPreviousAverages] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -414,26 +431,21 @@ function OperatorDashboard({ settings }: { settings: ApiSettings }) {
     let stopped = false;
     setLoading(true);
     setError('');
-    Promise.allSettled([
-      apiGet<unknown>(settings.baseUrl, '/DataService/anchor/v1/assets?take=1000', settings.credentials),
+    Promise.all([
+      readOperatorHistory(settings, OPERATOR_BATCH_ID),
       apiGet<unknown>(settings.baseUrl, '/DataService/anchor-ex/v1/attributes?take=1000&_includeSource=true&_includePath=true', settings.credentials),
-    ]).then(async ([assetResult, attributeResult]) => {
+    ]).then(([history, attributeResult]) => {
       if (stopped) return;
-      const assets = assetResult.status === 'fulfilled' ? unwrap(assetResult.value) as AnyRecord[] : [];
-      const attributes = attributeResult.status === 'fulfilled' ? unwrap(attributeResult.value) as AnyRecord[] : [];
-      const currentRecord = assets.find((item) => idOf(item) === OPERATOR_BATCH_ID)
-        ?? attributes.find((item) => idOf(item) === OPERATOR_BATCH_ID)
-        ?? await loadOperatorEntity(settings, OPERATOR_BATCH_ID);
-      const batchAssets = assets.filter((item) => idOf(item) && idOf(item) !== OPERATOR_BATCH_ID);
-      const namedBatches = batchAssets.filter((item) => /batch|lot/i.test(nameOf(item)));
-      const historic = namedBatches.length ? namedBatches : batchAssets;
-      if (assetResult.status === 'rejected' && attributeResult.status === 'rejected' && !currentRecord) {
-        throw assetResult.reason;
-      }
-      setCurrent(currentRecord);
-      setBatches(historic);
-      setPreviousId((selected) => historic.some((item) => idOf(item) === selected) ? selected : idOf(historic[0]));
-      if (!currentRecord) setError(`The configured batch ID ${OPERATOR_BATCH_ID} was not found in IIH Essentials. Check that the ID belongs to an asset, tree item, or attribute visible to this app.`);
+      const events = toBatchEvents(history);
+      const attributes = unwrap(attributeResult) as AnyRecord[];
+      const rpm = attributes.find((item) => /rpm|revolutions per minute|rotational speed/i.test(nameOf(item)));
+      const temperature = attributes.find((item) => /temp|temperature/i.test(nameOf(item)));
+      const signalFrom = (item?: AnyRecord): OperatorSignal | null => item && idOf(item) ? { id: idOf(item), name: nameOf(item), unit: item.unit ?? item.$unit ?? '' } : null;
+      setBatchHistory(events);
+      setSelectedBatchIndex((selected) => selected >= 0 && selected < events.length ? selected : events.length - 1);
+      setRpmSignal(signalFrom(rpm));
+      setTemperatureSignal(signalFrom(temperature));
+      if (!events.length) setError('No batch history was returned for the configured batch data attribute. Confirm that this ID is an IIH time-series variable.');
     }).catch((reason) => {
       if (!stopped) setError(reason instanceof Error ? reason.message : 'Could not load batch data from IIH Essentials.');
     }).finally(() => { if (!stopped) setLoading(false); });
@@ -441,68 +453,48 @@ function OperatorDashboard({ settings }: { settings: ApiSettings }) {
   }, [settings.baseUrl, settings.credentials]);
 
   useEffect(() => {
-    if (!previousId) { setPrevious(null); return; }
+    const selected = batchHistory[selectedBatchIndex];
+    const previous = batchHistory[selectedBatchIndex - 1];
+    if (!selected || !previous || !rpmSignal && !temperatureSignal) { setPreviousAverages({}); return; }
     let stopped = false;
-    loadOperatorEntity(settings, previousId)
-      .then((data) => { if (!stopped) { setPrevious(data); if (!data) setError('The selected previous batch was not found as an IIH asset, tree item, or attribute.'); } });
+    Promise.all([rpmSignal, temperatureSignal].filter((signal): signal is OperatorSignal => Boolean(signal)).map((signal) => readOperatorHistory(settings, signal.id, previous.timestamp, selected.timestamp)))
+      .then((results) => { if (!stopped) { const next: Record<string, number> = {}; [rpmSignal, temperatureSignal].filter((signal): signal is OperatorSignal => Boolean(signal)).forEach((signal, index) => { const average = averagePoints(results[index] ?? []); if (average !== undefined) next[signal.id] = average; }); setPreviousAverages(next); } })
+      .catch((reason) => { if (!stopped) setError(reason instanceof Error ? reason.message : 'Could not load the selected batch history.'); });
     return () => { stopped = true; };
-  }, [previousId, settings.baseUrl, settings.credentials]);
+  }, [batchHistory, selectedBatchIndex, rpmSignal, temperatureSignal, settings.baseUrl, settings.credentials]);
 
-  const fields = (record: AnyRecord | null): Record<string, unknown> => {
-    const result: Record<string, unknown> = {};
-    const visit = (value: unknown, prefix = '', depth = 0) => {
-      if (!value || typeof value !== 'object' || depth > 3) return;
-      for (const [key, child] of Object.entries(value as AnyRecord)) {
-        const path = prefix ? `${prefix}.${key}` : key;
-        if (child === null || ['string', 'number', 'boolean'].includes(typeof child)) result[path] = child;
-        else if (typeof child === 'object' && !Array.isArray(child)) visit(child, path, depth + 1);
-      }
+  useEffect(() => {
+    const signals = [rpmSignal, temperatureSignal].filter((signal): signal is OperatorSignal => Boolean(signal));
+    if (!signals.length) return;
+    let stopped = false;
+    let timer: number;
+    const refresh = async () => {
+      const to = new Date();
+      const from = new Date(to.getTime() - 10_000);
+      try {
+        const results = await Promise.all(signals.map((signal) => readOperatorHistory(settings, signal.id, from.toISOString(), to.toISOString())));
+        if (!stopped) { const next: Record<string, number> = {}; signals.forEach((signal, index) => { const latest = results[index]?.at(-1); const value = Number(latest?.value); if (Number.isFinite(value)) next[signal.id] = value; }); setLiveReadings(next); }
+      } catch (reason) { if (!stopped) setError(reason instanceof Error ? reason.message : 'Unable to refresh RPM and temperature.'); }
+      if (!stopped) timer = window.setTimeout(() => void refresh(), 1000);
     };
-    if (record) visit(record);
-    return result;
-  };
-  const valueFor = (record: AnyRecord | null, ...names: string[]) => {
-    const entries = Object.entries(fields(record));
-    for (const name of names) {
-      const found = entries.find(([key]) => key.toLowerCase().replace(/[^a-z0-9]/g, '').endsWith(name.toLowerCase().replace(/[^a-z0-9]/g, '')));
-      if (found) return found[1];
-    }
-    return undefined;
-  };
-  const displayValue = (value: unknown, digits = 2) => {
-    if (value === undefined || value === null || value === '') return '—';
-    const number = Number(value);
-    return Number.isFinite(number) ? number.toLocaleString(undefined, { maximumFractionDigits: digits }) : String(value);
-  };
-  const materialFields = [['Salt (kg)', ['salt', 'saltKg']], ['Citric (kg)', ['citric', 'citricKg']], ['Caustic (kg)', ['caustic', 'causticKg']], ['Water (kg)', ['water', 'waterKg']]] as const;
-  const batchTitle = current ? nameOf(current) : loading ? 'Loading…' : '—';
-  const shiftBatchCount = batches.length + (current ? 1 : 0);
+    timer = window.setTimeout(() => void refresh(), 1000);
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [rpmSignal, temperatureSignal, settings.baseUrl, settings.credentials]);
+
+  const currentEvent = batchHistory.at(-1);
+  const lastBatch = batchHistory[selectedBatchIndex - 1];
+  const liveValue = (signal: OperatorSignal | null) => signal ? liveReadings[signal.id] : undefined;
+  const formatMetric = (value: number | undefined) => value === undefined ? '—' : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
   return <main className="operator-page">
-    <div className="operator-brandbar"><div><b>Intelligent Mixer — Operator Dashboard</b><span>Amil · Mixer 3 · Surflex Top Load Ecoboost</span></div><div className="operator-shift">Shift B&nbsp; | &nbsp;{new Date().toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</div></div>
-    <div className="operator-current-strip"><div><span>Current batch</span><b>{batchTitle}</b></div><span>Mode: <b>{String(valueFor(current, 'mode') ?? 'AUTO')}</b></span><span>Elapsed: <b>{String(valueFor(current, 'elapsed', 'elapsedTime') ?? '—')}</b></span><b className="operator-step">Step: {String(valueFor(current, 'step', 'currentStep') ?? 'Batch data loaded — awaiting process values')}</b><span className="prediction-ready">PREDICTION READY</span></div>
+    <div className="operator-current-strip"><div><span>Current batch</span><b>{currentEvent?.label ?? (loading ? 'Loading…' : '—')}</b></div><span>Mode: <b>AUTO</b></span><span>Batch started: <b>{currentEvent ? formatTime(currentEvent.timestamp) : '—'}</b></span><b className="operator-step">Live RPM and temperature refresh every second</b><span className="prediction-ready">{currentEvent ? 'BATCH DATA READY' : 'WAITING FOR DATA'}</span></div>
     {error && <div className="error-banner"><AlertCircle size={16} /><span>{error}</span></div>}
     <section className="operator-review-grid">
-      <article className="operator-review-card"><div className="operator-review-heading"><div><b>Last batch in review</b><span>Batch cycle time</span></div><span className="operator-batch-badge">{previous ? nameOf(previous) : '—'}</span></div><div className="operator-two-metrics"><div><strong>{displayValue(valueFor(previous, 'cycleTime', 'batchCycleTime'), 0)}</strong><small>min</small><span>Standard 55 min</span></div><div><span className="review-metric-label">Correction time loss</span><strong className="danger-value">{displayValue(valueFor(previous, 'correctionTimeLoss', 'correctionTime'), 1)}</strong><small>min</small><span>Time from pH/visc check to enzyme</span></div></div><div className="operator-material-label">Material corrections (this batch)</div><div className="operator-material-grid">{materialFields.map(([label, keys]) => <div key={label}><b>{displayValue(valueFor(previous, ...keys), 0)}</b><span>{label}</span></div>)}</div></article>
-      <article className="operator-review-card"><div className="operator-review-heading"><div><b>Current shift in review</b><span>Batch cycle time</span></div><label className="operator-batch-select"><select aria-label="Select previous batch" value={previousId} onChange={(event) => setPreviousId(event.target.value)} disabled={!batches.length}><option value="">Select batch</option>{batches.map((batch) => <option key={idOf(batch)} value={idOf(batch)}>{nameOf(batch)}</option>)}</select><ChevronDown size={13} /></label></div><div className="operator-two-metrics"><div><strong>{displayValue(valueFor(current, 'cycleTime', 'batchCycleTime'), 0)}</strong><small>min</small><span>Avg · Standard 55 min</span></div><div><span className="review-metric-label">Correction time loss</span><strong className="warning-value">{displayValue(valueFor(current, 'correctionTimeLoss', 'correctionTime'), 1)}</strong><small>min</small><span>Selected batch · {shiftBatchCount} batches in review</span></div></div><div className="operator-material-label">Total material corrections (shift)</div><div className="operator-material-grid">{materialFields.map(([label, keys]) => <div key={label}><b>{displayValue(valueFor(current, ...keys), 0)}</b><span>{label}</span></div>)}</div></article>
+      <article className="operator-review-card"><div className="operator-review-heading"><div><b>Current shift in review</b><span>Live process readings</span></div><span className="operator-batch-badge">{currentEvent?.label ?? 'Current batch'}</span></div><div className="operator-live-metrics"><div><span>{rpmSignal?.name ?? 'RPM'}</span><strong>{formatMetric(liveValue(rpmSignal))}</strong><small>{rpmSignal?.unit || 'rpm'} · live</small></div><div><span>{temperatureSignal?.name ?? 'Temperature'}</span><strong>{formatMetric(liveValue(temperatureSignal))}</strong><small>{temperatureSignal?.unit || '°C'} · live</small></div></div></article>
+      <article className="operator-review-card"><div className="operator-review-heading"><div><b>Last batch in review</b><span>{lastBatch ? `${lastBatch.label} · ${formatTime(lastBatch.timestamp)}` : 'Average RPM and temperature'}</span></div><label className="operator-batch-select"><select aria-label="Choose a batch to review its predecessor" value={selectedBatchIndex} onChange={(event) => setSelectedBatchIndex(Number(event.target.value))} disabled={batchHistory.length < 2}><option value={-1}>Select batch</option>{batchHistory.map((event, index) => <option key={`${event.timestamp}-${index}`} value={index}>{event.label}</option>)}</select><ChevronDown size={13} /></label></div><div className="operator-live-metrics"><div><span>Average RPM</span><strong>{rpmSignal ? formatMetric(previousAverages[rpmSignal.id]) : '—'}</strong><small>{rpmSignal?.unit || 'rpm'} · {lastBatch ? lastBatch.label : 'previous batch'}</small></div><div><span>Average temperature</span><strong>{temperatureSignal ? formatMetric(previousAverages[temperatureSignal.id]) : '—'}</strong><small>{temperatureSignal?.unit || '°C'} · {lastBatch ? lastBatch.label : 'previous batch'}</small></div></div><div className="operator-batch-select-help">Select a batch to review the batch immediately before it.</div></article>
     </section>
-    <section className="operator-quality-grid">
-      {([['Viscosity', 'viscosity', 'viscosityPredicted', 'viscosityActual', 'viscosityLsl', 'viscosityUsl', 'cPs'], ['pH', 'pH', 'pHPredicted', 'pHActual', 'pHLsl', 'pHUsl', '']] as const).map(([title, key, predictedKey, actualKey, lslKey, uslKey, unit]) => {
-        const predicted = valueFor(current, predictedKey, key);
-        const actual = valueFor(current, actualKey);
-        const lsl = valueFor(current, lslKey);
-        const usl = valueFor(current, uslKey);
-        const numericPredicted = Number(predicted);
-        const numericActual = Number(actual);
-        const deviation = Number.isFinite(numericPredicted) && Number.isFinite(numericActual) ? Math.abs(numericPredicted - numericActual) : undefined;
-        const confidence = deviation === undefined ? '—' : `${displayValue(deviation, 2)} ${unit}`;
-        const isGood = deviation !== undefined && deviation <= Math.max(Math.abs(numericActual) * .03, .01);
-        return <article className="operator-quality-card" key={title}><div className="operator-review-heading"><b>{title}</b><span className="operator-batch-badge">Current batch {batchTitle}</span></div><div className="operator-quality-values"><div><span>Predicted</span><strong className="predicted-value">{displayValue(predicted, title === 'pH' ? 2 : 0)}</strong><small>{unit || 'operator reading'}</small></div><div><span>Actual (lab)</span><strong>{displayValue(actual, title === 'pH' ? 2 : 0)}</strong><small>Operator entered</small></div><div><span>Spec (LSL - USL)</span><strong className="spec-value">{displayValue(lsl)} – {displayValue(usl)}</strong></div></div>
-          <div className="operator-spec-caption">Position against specification</div><div className="operator-spec-track"><div className="operator-spec-window" /><span className="operator-spec-dot actual" /><span className="operator-spec-dot predicted" /></div><div className="operator-spec-ends"><span>LSL {displayValue(lsl)}</span><span>USL {displayValue(usl)}</span></div><div className="operator-confidence"><div className="operator-gauge-wrap"><div className="operator-gauge"><i /></div><div className="operator-gauge-reading">{deviation === undefined ? 'Awaiting data' : `${confidence} · ${isGood ? 'within range' : 'review'}`}</div><span>Prediction error for this batch</span></div><div className="operator-recommendation"><b>Recommendation</b><strong className={isGood ? 'clear' : 'verify'}>{deviation === undefined ? 'AWAITING BATCH DATA' : isGood ? 'CLEAR ON PREDICTION' : 'VERIFY WITH LAB'}</strong><p>{deviation === undefined ? 'Predicted and lab values will appear when the batch signal IDs are configured.' : isGood ? 'Prediction is within the expected range. No correction needed.' : 'Prediction differs from the lab value. Confirm with lab before clearing.'}</p></div></div>
-        </article>;
-      })}
-    </section>
-    <footer className="operator-note">Gauge zones are indicative. Prediction and specification values display from the selected IIH batch record when present.</footer>
+    <section className="operator-quality-grid"><article className="operator-quality-card"><div className="operator-review-heading"><b>Viscosity</b><span className="operator-batch-badge">Previous batch {lastBatch?.label ?? '—'}</span></div><div className="operator-quality-values"><div><span>Predicted</span><strong className="predicted-value">—</strong><small>cPs (MAE, last 100)</small></div><div><span>Actual (lab)</span><strong>—</strong><small>Operator entered</small></div><div><span>Spec (LSL - USL)</span><strong className="spec-value">Awaiting IDs</strong><small>cPs</small></div></div><div className="operator-quality-placeholder">Provide the viscosity signal and specification IDs to display batch predictions and lab results.</div></article><article className="operator-quality-card"><div className="operator-review-heading"><b>pH</b><span className="operator-batch-badge">Previous batch {lastBatch?.label ?? '—'}</span></div><div className="operator-quality-values"><div><span>Predicted</span><strong className="predicted-value">—</strong><small>MAE, last 100</small></div><div><span>Actual (lab)</span><strong>—</strong><small>Operator entered</small></div><div><span>Spec (LSL - USL)</span><strong className="spec-value">Awaiting IDs</strong><small>pH</small></div></div><div className="operator-quality-placeholder">Provide the pH signal and specification IDs to display batch predictions and lab results.</div></article></section>
+    <footer className="operator-note">Batch history comes from the configured IIH time-series attribute. Selecting a batch shows RPM and temperature averages from the preceding batch interval.</footer>
   </main>;
 }
 

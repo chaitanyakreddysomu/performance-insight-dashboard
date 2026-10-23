@@ -4,3 +4,7 @@
 /* Enlarge the operator UI at normal browser zoom while keeping its viewport fit. */
 .operator-page{zoom:1.12;width:89.2857%;max-width:1348px}
 @media(max-width:760px){.operator-page{width:89.2857%}}
+
+.operator-live-metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:9px}.operator-live-metrics>div{background:#f0f3f6;border-radius:4px;padding:9px 11px;display:grid;grid-template-columns:1fr auto;align-items:baseline;gap:2px 6px}.operator-live-metrics>div>span{font-size:8px;color:#6f8197;font-weight:600}.operator-live-metrics strong{grid-column:1;font-size:23px;line-height:1.05;color:#122d53}.operator-live-metrics small{grid-column:1/-1;font-size:7px;color:#8793a3}.operator-batch-select-help{margin-top:6px;color:#8491a0;font-size:7px}@media(max-width:760px){.operator-live-metrics strong{font-size:21px}}
+
+.operator-quality-placeholder{margin-top:20px;padding:13px;background:#f0f3f6;border-radius:5px;color:#78879a;font-size:9px;line-height:1.6}.operator-quality-card{min-height:150px}.operator-quality-values strong.spec-value{font-size:11px}@media(max-width:760px){.operator-quality-grid{grid-template-columns:1fr}}
