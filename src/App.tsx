@@ -379,6 +379,29 @@ function MetricCard({ label, value, unit, caption, icon, accent }: { label: stri
 
 const OPERATOR_BATCH_ID = 'aa72e1b1-bf4a-473c-981f-d3176248d575';
 
+async function loadOperatorEntity(settings: ApiSettings, entityId: string): Promise<AnyRecord | null> {
+  const encoded = encodeURIComponent(entityId);
+  const candidates = [
+    `/DataService/anchor/v1/assets/${encoded}`,
+    `/DataService/anchor-ex/v1/treeitems/${encoded}/entity`,
+    `/DataService/anchor-ex/v1/treeitems/${encoded}`,
+    `/DataService/anchor-ex/v1/attributes/${encoded}`,
+    `/DataService/anchor/v1/attributes/${encoded}`,
+    `/DataService/anchor/v1/metadata/${encoded}`,
+  ];
+  for (const path of candidates) {
+    try {
+      const data = await apiGet<unknown>(settings.baseUrl, path, settings.credentials);
+      const record = data && typeof data === 'object' && !Array.isArray(data) ? ((data as AnyRecord).data ?? data) : data;
+      if (record && typeof record === 'object' && !Array.isArray(record)) return record as AnyRecord;
+    } catch {
+      // The supplied batch ID can refer to an asset, tree item, or attribute.
+      // Try the next supported IIH resource type when one returns 404.
+    }
+  }
+  return null;
+}
+
 function OperatorDashboard({ settings }: { settings: ApiSettings }) {
   const [batches, setBatches] = useState<AnyRecord[]>([]);
   const [current, setCurrent] = useState<AnyRecord | null>(null);
@@ -391,17 +414,26 @@ function OperatorDashboard({ settings }: { settings: ApiSettings }) {
     let stopped = false;
     setLoading(true);
     setError('');
-    Promise.all([
-      apiGet<unknown>(settings.baseUrl, `/DataService/anchor/v1/assets/${encodeURIComponent(OPERATOR_BATCH_ID)}`, settings.credentials),
+    Promise.allSettled([
       apiGet<unknown>(settings.baseUrl, '/DataService/anchor/v1/assets?take=1000', settings.credentials),
-    ]).then(([currentData, listData]) => {
+      apiGet<unknown>(settings.baseUrl, '/DataService/anchor-ex/v1/attributes?take=1000&_includeSource=true&_includePath=true', settings.credentials),
+    ]).then(async ([assetResult, attributeResult]) => {
       if (stopped) return;
-      const currentRecord = (currentData && typeof currentData === 'object' && !Array.isArray(currentData) ? (currentData as AnyRecord).data ?? currentData : currentData) as AnyRecord;
-      const allBatches = unwrap(listData) as AnyRecord[];
-      const historic = allBatches.filter((item) => idOf(item) && idOf(item) !== OPERATOR_BATCH_ID);
+      const assets = assetResult.status === 'fulfilled' ? unwrap(assetResult.value) as AnyRecord[] : [];
+      const attributes = attributeResult.status === 'fulfilled' ? unwrap(attributeResult.value) as AnyRecord[] : [];
+      const currentRecord = assets.find((item) => idOf(item) === OPERATOR_BATCH_ID)
+        ?? attributes.find((item) => idOf(item) === OPERATOR_BATCH_ID)
+        ?? await loadOperatorEntity(settings, OPERATOR_BATCH_ID);
+      const batchAssets = assets.filter((item) => idOf(item) && idOf(item) !== OPERATOR_BATCH_ID);
+      const namedBatches = batchAssets.filter((item) => /batch|lot/i.test(nameOf(item)));
+      const historic = namedBatches.length ? namedBatches : batchAssets;
+      if (assetResult.status === 'rejected' && attributeResult.status === 'rejected' && !currentRecord) {
+        throw assetResult.reason;
+      }
       setCurrent(currentRecord);
       setBatches(historic);
       setPreviousId((selected) => historic.some((item) => idOf(item) === selected) ? selected : idOf(historic[0]));
+      if (!currentRecord) setError(`The configured batch ID ${OPERATOR_BATCH_ID} was not found in IIH Essentials. Check that the ID belongs to an asset, tree item, or attribute visible to this app.`);
     }).catch((reason) => {
       if (!stopped) setError(reason instanceof Error ? reason.message : 'Could not load batch data from IIH Essentials.');
     }).finally(() => { if (!stopped) setLoading(false); });
@@ -411,9 +443,8 @@ function OperatorDashboard({ settings }: { settings: ApiSettings }) {
   useEffect(() => {
     if (!previousId) { setPrevious(null); return; }
     let stopped = false;
-    apiGet<unknown>(settings.baseUrl, `/DataService/anchor/v1/assets/${encodeURIComponent(previousId)}`, settings.credentials)
-      .then((data) => { if (!stopped) setPrevious((data && typeof data === 'object' && !Array.isArray(data) ? (data as AnyRecord).data ?? data : data) as AnyRecord); })
-      .catch((reason) => { if (!stopped) setError(reason instanceof Error ? reason.message : 'Could not load the selected batch.'); });
+    loadOperatorEntity(settings, previousId)
+      .then((data) => { if (!stopped) { setPrevious(data); if (!data) setError('The selected previous batch was not found as an IIH asset, tree item, or attribute.'); } });
     return () => { stopped = true; };
   }, [previousId, settings.baseUrl, settings.credentials]);
 
