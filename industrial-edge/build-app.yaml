@@ -18,7 +18,7 @@ commands:
     parameters:
       appname: "${{appname}}"
       reponame: "${{reponame}}"
-      iconpath: "./industrial-edge/icon.svg"
+      iconpath: "./industrial-edge/icon.png"
       appdescription: "Frontend-only IIH Essentials operator dashboard"
       allowfailure: "true"
   - command:
