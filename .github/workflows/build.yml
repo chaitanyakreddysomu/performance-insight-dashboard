@@ -1,45 +1,38 @@
-name: Build dashboard
+name: Build Industrial Edge app
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-app:
+    runs-on: [self-hosted, linux, x64]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Build frontend
-        run: npm run build
 
-  industrial-edge-app:
-    name: Package Industrial Edge .app
-    needs: build
-    if: github.event_name != 'pull_request'
-    runs-on: [self-hosted, linux, x64, industrial-edge]
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Build and verify frontend
+        run: |
+          npm ci
+          npm run build
+
       - name: Verify Industrial Edge tools
         run: |
-          command -v docker
-          command -v iectl
+          docker --version
           docker info
           iectl version
+
       - name: Build image and export .app
         env:
           RUN_NUMBER: ${{ github.run_number }}
@@ -48,6 +41,7 @@ jobs:
           docker build -t performance-insight-dashboard:1.0.0 .
           iectl apply -f ./industrial-edge/build-app.yaml
           find dist/industrial-edge -maxdepth 1 -type f -name '*.app' -print -quit | grep -q .
+
       - name: Upload Industrial Edge application
         uses: actions/upload-artifact@v4
         with:

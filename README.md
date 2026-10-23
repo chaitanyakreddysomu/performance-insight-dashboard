@@ -35,9 +35,9 @@ This builds `performance-insight-dashboard:1.0.0`, applies [`industrial-edge/bui
 
 ### Generate the `.app` from GitHub Actions
 
-Every push to `main` first builds the frontend on a GitHub-hosted runner. The workflow then packages and uploads the `.app` as the `performance-insight-industrial-edge-app` Actions artifact. Pull requests run the frontend build only.
+Every push to `main` runs a single workflow that builds the frontend, builds the Docker image, exports the `.app`, and uploads it as the `performance-insight-industrial-edge-app` Actions artifact. Version tags (`v*`) and manual runs use the same flow.
 
-The packaging job requires a Linux x64 self-hosted GitHub Actions runner with Siemens `iectl` and Docker installed. Register it with the labels `self-hosted`, `linux`, `x64`, and `industrial-edge`. On that runner, configure a persistent Publisher workspace and a Docker Engine API at `http://127.0.0.1:2375` (reachable only from the runner host):
+The workflow requires a Linux x64 self-hosted GitHub Actions runner with Siemens `iectl` and Docker installed. Register it with the default labels `self-hosted`, `linux`, and `x64`; it no longer requires the extra custom `industrial-edge` label. On that runner, configure a persistent Publisher workspace and a Docker Engine API at `http://127.0.0.1:2375` (reachable only from the runner host):
 
 ```bash
 mkdir -p "$HOME/industrial-edge/performance-insight-workspace"
@@ -49,6 +49,6 @@ iectl config add publisher \
 
 Install `iectl` from the Industrial Edge Hub's Developer Tools download. The job needs no IEM login; it uses the configured local Publisher workspace to export the standalone app. The workflow assigns each package a unique `1.0.<run number>` version while preserving the app ID in the persistent workspace. Download the artifact from the successful workflow run in the repository's Actions tab.
 
-If that runner is not online, the frontend build still succeeds but the `.app` packaging job waits for a matching runner.
+GitHub-hosted runners do not include Siemens `iectl`. If no matching self-hosted runner is online, the whole workflow waits for one; the workflow cannot export a valid `.app` without that runner and its Publisher configuration.
 
 `compose.yaml` is the App Publisher Compose input. The current image build targets the Docker host architecture; build the image for ARM64 and update the Publisher architecture if your target device requires ARM64.
