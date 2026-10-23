@@ -1,19 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  Activity, AlertCircle, ArrowDownRight, ArrowUpRight, BarChart3, Check, ChevronDown,
+  Activity, AlertCircle, ArrowDownRight, ArrowUpRight, BarChart3, Braces, Check, ChevronDown,
   ChevronRight, CircleHelp, Clock3, Factory, Gauge, Layers3, LoaderCircle, RefreshCw,
-  Search, Settings2, SlidersHorizontal, Wifi, X,
+  Search, Settings2, SlidersHorizontal, Wifi, X, Play,
 } from 'lucide-react';
+import apiCatalogData from './data/iih-essentials-2.7.json';
 
 type AnyRecord = Record<string, any>;
 type Point = { timestamp: string; value: number | string; qualitycode?: number };
 type Asset = AnyRecord;
 type Signal = AnyRecord;
 type ApiSettings = { baseUrl: string; credentials: boolean };
+type ApiParameter = { name: string; in: string; required: boolean; description?: string; example?: unknown; default?: unknown; type?: string; format?: string; enum?: string[] };
+type ApiEndpoint = { path: string; method: string; tags: string[]; summary: string; description?: string; deprecated?: boolean; parameters: ApiParameter[]; requestBody?: { required: boolean; contentType?: string; example?: unknown; schema?: AnyRecord }; responses: { status: string; description?: string }[] };
+type ApiCatalog = { info: { title: string; version: string }; endpointCount: number; tags: { name: string; description?: string }[]; endpoints: ApiEndpoint[] };
+
+const DEFAULT_API_BASE = 'http://edgeappdataservice:4203';
+const savedApiBase = localStorage.getItem('iihBase');
+const apiCatalog = apiCatalogData as ApiCatalog;
 
 const storedSettings: ApiSettings = {
-  baseUrl: localStorage.getItem('iihBase') || '',
+  baseUrl: savedApiBase && savedApiBase !== 'http://localhost:4203' ? savedApiBase : DEFAULT_API_BASE,
   credentials: localStorage.getItem('iihCredentials') !== 'false',
 };
 const unwrap = (value: any): any[] => Array.isArray(value) ? value :
@@ -22,11 +30,13 @@ const unwrap = (value: any): any[] => Array.isArray(value) ? value :
 const idOf = (value?: AnyRecord) => value?.id ?? value?.anchor ?? value?.['$anchor'] ?? value?.variableId ?? value?.assetId ?? '';
 const nameOf = (value?: AnyRecord) => value?.name ?? value?.displayName ?? value?.label ?? value?.['$anchor'] ?? 'Unnamed';
 const formatTime = (raw?: string) => raw ? new Date(raw).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+const resolveApiUrl = (baseUrl: string, path: string) => baseUrl.replace(/\/+$/, '') === DEFAULT_API_BASE ? `/iih-api${path}` : `${baseUrl.replace(/\/+$/, '')}${path}`;
 
 async function apiGet<T>(baseUrl: string, path: string, credentials: boolean): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${baseUrl.replace(/\/+$/, '')}${path}`, {
+    const target = resolveApiUrl(baseUrl, path);
+    response = await fetch(target, {
       credentials: credentials ? 'include' : 'omit',
       headers: { Accept: 'application/json' },
     });
@@ -40,11 +50,125 @@ async function apiGet<T>(baseUrl: string, path: string, credentials: boolean): P
   return data as T;
 }
 
+function ApiExplorer({ settings }: { settings: ApiSettings }) {
+  const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState('');
+  const groups = useMemo(() => {
+    const needle = search.toLowerCase().trim();
+    const matches = apiCatalog.endpoints.filter((endpoint) => !needle || `${endpoint.path} ${endpoint.method} ${endpoint.summary} ${endpoint.tags.join(' ')}`.toLowerCase().includes(needle));
+    const grouped = new Map<string, ApiEndpoint[]>();
+    for (const endpoint of matches) {
+      const tag = endpoint.tags[0] ?? 'Other';
+      grouped.set(tag, [...(grouped.get(tag) ?? []), endpoint]);
+    }
+    return [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [search]);
+  const visibleCount = groups.reduce((count, [, endpoints]) => count + endpoints.length, 0);
+
+  return <main className="api-page">
+    <div className="api-page-head"><div><div className="section-kicker">IIH ESSENTIALS REST API</div><h1>API Explorer</h1><p>Browse every operation in the Siemens {apiCatalog.info.version} specification. Open a GET operation to call IIH Essentials and inspect its live response.</p></div><div className="api-version">OpenAPI <b>{apiCatalog.info.version}</b></div></div>
+    <div className="api-upstream"><span className="upstream-led" /><div><b>Live API target</b><code>{settings.baseUrl || DEFAULT_API_BASE}</code></div><span className="proxy-note">Device network via same-origin route</span></div>
+    <div className="api-toolbar"><label className="search-box api-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search paths, operations, or groups" /></label><span>{visibleCount} of {apiCatalog.endpointCount} operations</span></div>
+    <div className="api-groups">{groups.map(([tag, endpoints]) => <section className="api-group" key={tag}><header><div><h2>{tag}</h2><p>{apiCatalog.tags.find((item) => item.name === tag)?.description || `${endpoints.length} documented operation${endpoints.length === 1 ? '' : 's'}`}</p></div><span>{endpoints.length}</span></header><div className="api-operation-list">{endpoints.map((endpoint, index) => {
+      const operationKey = `${tag}:${endpoint.method}:${endpoint.path}:${index}`;
+      const isOpen = expanded === operationKey;
+      return <article className={`api-operation ${isOpen ? 'open' : ''}`} key={operationKey}><button className="operation-toggle" onClick={() => setExpanded(isOpen ? '' : operationKey)} aria-expanded={isOpen}><span className={`method-badge method-${endpoint.method.toLowerCase()}`}>{endpoint.method}</span><code>{endpoint.path}</code><span className="operation-summary">{endpoint.summary}</span>{endpoint.deprecated && <span className="deprecated-badge">Deprecated</span>}<ChevronDown size={15} className="operation-chevron" /></button>{isOpen && <ApiOperationPanel endpoint={endpoint} settings={settings} />}</article>;
+    })}</div></section>)}{groups.length === 0 && <div className="api-no-results">No API operations match “{search}”.</div>}</div>
+    <footer className="api-footer">API catalog source: <a href="https://developer.siemens.com/industrial-information-hub/api/iih-essentials/v2.7/iih-essentials-2.7.0.html" target="_blank" rel="noreferrer">Siemens IIH Essentials API {apiCatalog.info.version}</a><span>GET calls run when opened. Other HTTP methods require an explicit run action.</span></footer>
+  </main>;
+}
+
+function ApiOperationPanel({ endpoint, settings }: { endpoint: ApiEndpoint; settings: ApiSettings }) {
+  const [parameters, setParameters] = useState<Record<string, string>>(() => Object.fromEntries(endpoint.parameters.map((parameter) => [parameter.name, displayParameterValue(parameter.example ?? parameter.default)])));
+  const [body, setBody] = useState(() => endpoint.requestBody?.example && typeof endpoint.requestBody.example === 'object' && '$ref' in (endpoint.requestBody.example as AnyRecord) ? '{}' : endpoint.requestBody?.example ? JSON.stringify(endpoint.requestBody.example, null, 2) : '{}');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<unknown>();
+  const [error, setError] = useState('');
+  const [statusCode, setStatusCode] = useState<number>();
+  const [requestUrl, setRequestUrl] = useState('');
+  const autoRequested = useRef(false);
+
+  const requiredMissing = endpoint.parameters.filter((parameter) => parameter.required && !parameters[parameter.name]?.trim());
+  const sideEffectingGet = endpoint.method === 'GET' && /delete|reset|create|discover|abort|write|trigger|start|stop|execute|cancel|release|attach/i.test(`${endpoint.path} ${endpoint.summary}`);
+  const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(endpoint.method) || sideEffectingGet;
+  const autoReadable = ['GET', 'HEAD', 'OPTIONS'].includes(endpoint.method) && !sideEffectingGet;
+
+  async function execute(manual = false) {
+    if (mutating && !manual) return;
+    if (requiredMissing.length) { setError(`Provide required ${requiredMissing.map((parameter) => `${parameter.in} parameter “${parameter.name}”`).join(', ')} to run this operation.`); return; }
+    if ((endpoint.method === 'DELETE' || sideEffectingGet) && !window.confirm(`Run ${endpoint.method} ${endpoint.path}? This may change IIH Essentials data.`)) return;
+    let path = endpoint.path;
+    const headers: Record<string, string> = { Accept: 'application/json' };
+    for (const parameter of endpoint.parameters) {
+      const value = parameters[parameter.name]?.trim();
+      if (!value) continue;
+      if (parameter.in === 'path') path = path.replace(`{${parameter.name}}`, encodeURIComponent(value));
+      if (parameter.in === 'header' && parameter.name.toLowerCase() !== 'cookie') headers[parameter.name] = value;
+    }
+    const query = new URLSearchParams();
+    for (const parameter of endpoint.parameters) {
+      const value = parameters[parameter.name]?.trim();
+      if (parameter.in === 'query' && value) query.set(parameter.name, value);
+    }
+    if (query.toString()) path += `?${query.toString()}`;
+    const target = resolveApiUrl(settings.baseUrl, path);
+    setRequestUrl(target); setLoading(true); setError(''); setResult(undefined); setStatusCode(undefined);
+    try {
+      if (endpoint.requestBody && !['GET', 'HEAD'].includes(endpoint.method)) headers['Content-Type'] = endpoint.requestBody.contentType ?? 'application/json';
+      const response = await fetch(target, {
+        method: endpoint.method,
+        credentials: settings.credentials ? 'include' : 'omit',
+        headers,
+        body: endpoint.requestBody && !['GET', 'HEAD'].includes(endpoint.method) ? body : undefined,
+      });
+      const raw = await response.text();
+      let data: unknown;
+      try { data = raw ? JSON.parse(raw) : null; } catch { data = raw; }
+      setStatusCode(response.status); setResult(data);
+      if (!response.ok) setError(`HTTP ${response.status} ${response.statusText}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Request failed. Check that the Industrial Edge proxy can reach IIH Essentials.');
+    } finally { setLoading(false); }
+  }
+
+  useEffect(() => {
+    if (!autoRequested.current && autoReadable && !requiredMissing.length) {
+      autoRequested.current = true; void execute(false);
+    }
+    // Run once when the accordion is opened; changing a parameter is explicit via Run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return <div className="operation-detail"><p className="operation-description">{endpoint.description || endpoint.summary}</p><div className="operation-meta"><code>{requestUrl || `${settings.baseUrl}${endpoint.path}`}</code><span>{endpoint.deprecated ? 'Deprecated in this API version' : 'IIH Essentials 2.7.0'}</span></div>
+    {endpoint.parameters.length > 0 && <div className="parameter-section"><h4>Parameters</h4><div className="parameter-grid">{endpoint.parameters.map((parameter) => <label key={`${parameter.in}-${parameter.name}`} className="parameter-field"><span>{parameter.name}<small>{parameter.in}{parameter.required ? ' · required' : ''}</small></span><input value={parameters[parameter.name] ?? ''} onChange={(event) => setParameters((current) => ({ ...current, [parameter.name]: event.target.value }))} placeholder={parameter.example === undefined ? parameter.description || 'Optional' : `Example: ${displayParameterValue(parameter.example)}`} />{parameter.description && <em>{parameter.description}</em>}</label>)}</div></div>}
+    {endpoint.requestBody && <label className="body-field"><span>Request body <small>{endpoint.requestBody.contentType}{endpoint.requestBody.required ? ' · required' : ''}</small></span><textarea value={body} onChange={(event) => setBody(event.target.value)} spellCheck={false} /></label>}
+    <div className="operation-actions">{mutating && <span className="mutation-hint"><AlertCircle size={13} /> This operation can change data and requires a deliberate run.</span>}<button className="run-operation" onClick={() => void execute(true)} disabled={loading || requiredMissing.length > 0}><Play size={13} />{loading ? 'Requesting…' : `Run ${endpoint.method}`}</button></div>
+    {requiredMissing.length > 0 && <div className="required-hint">Fill required parameters to run this request.</div>}
+    {loading && <div className="api-loading"><LoaderCircle className="spin" size={15} /> Calling IIH Essentials…</div>}
+    {error && <div className="api-response-error"><AlertCircle size={14} />{error}</div>}
+    {result !== undefined && <div className="api-result"><div className="result-head"><h4>Response</h4><span className={`response-status ${statusCode && statusCode < 400 ? 'success' : 'failure'}`}>{statusCode}</span></div><pre>{formatJson(result)}</pre></div>}
+    <div className="documented-responses"><b>Documented responses</b>{endpoint.responses.slice(0, 5).map((response) => <span key={response.status}><code>{response.status}</code> {response.description}</span>)}</div>
+  </div>;
+}
+
+function displayParameterValue(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
+function formatJson(value: unknown): string {
+  let output: string;
+  if (typeof value === 'string') output = value;
+  else { try { output = JSON.stringify(value, null, 2) ?? 'null'; } catch { output = String(value); } }
+  return output.length > 50000 ? `${output.slice(0, 50000)}\n\n… response preview truncated at 50,000 characters …` : output;
+}
+
 function App() {
   const [settings, setSettings] = useState<ApiSettings>(storedSettings);
   const [draftUrl, setDraftUrl] = useState(storedSettings.baseUrl);
   const [draftCredentials, setDraftCredentials] = useState(storedSettings.credentials);
   const [showSettings, setShowSettings] = useState(false);
+  const [view, setView] = useState<'dashboard' | 'api'>(() => window.location.pathname.startsWith('/api') ? 'api' : 'dashboard');
   const [connection, setConnection] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [error, setError] = useState('');
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -54,6 +178,12 @@ function App() {
   const [rangeHours, setRangeHours] = useState(24);
   const [search, setSearch] = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  useEffect(() => {
+    const onPopState = () => setView(window.location.pathname.startsWith('/api') ? 'api' : 'dashboard');
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   const activeSignal = useMemo(() => signals.find((signal) => idOf(signal) === selectedSignal) ?? signals[0], [signals, selectedSignal]);
   const activePoints = activeSignal ? series[idOf(activeSignal)] ?? [] : [];
@@ -112,15 +242,21 @@ function App() {
     setSettings(next); setShowSettings(false); setSelectedSignal(''); void loadDashboard(next);
   }
 
+  function navigate(nextView: 'dashboard' | 'api') {
+    window.history.pushState({}, '', nextView === 'api' ? '/api' : '/');
+    setView(nextView);
+  }
+
   const connected = connection === 'connected';
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="product"><span className="product-symbol"><Activity size={17} /></span><span>Performance Insight <em>Operator Dashboard</em></span></div>
+        <nav className="page-nav"><button className={view === 'dashboard' ? 'selected' : ''} onClick={() => navigate('dashboard')}>Overview</button><button className={view === 'api' ? 'selected' : ''} onClick={() => navigate('api')}><Braces size={14} /> API Explorer</button></nav>
         <div className="topbar-right"><span className={`connection-pill ${connected ? 'is-online' : ''}`}><i />{connected ? 'CONNECTED' : connection === 'connecting' ? 'CONNECTING' : 'NOT CONNECTED'}</span><span className="clock-label"><Clock3 size={14} />{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Live operations'}</span><button className="top-icon" title="Connection settings" onClick={() => setShowSettings(true)}><Settings2 size={18} /></button></div>
       </header>
 
-      <main className="dashboard">
+      {view === 'api' ? <ApiExplorer settings={settings} /> : <main className="dashboard">
         <section className="status-strip">
           <div className="status-cell"><span className="status-label">DEVICE</span><span className="status-value"><span className={`device-led ${connected ? 'online' : ''}`} />{settings.baseUrl ? settings.baseUrl.replace(/^https?:\/\//, '') : 'IIH Essentials not configured'}</span></div>
           <span className="strip-divider" />
@@ -159,9 +295,9 @@ function App() {
           })}{assets.length === 0 && <div className="assets-empty"><Layers3 size={20} /><b>No assets to display</b><span>Connect to an IIH Essentials instance to load the equipment hierarchy.</span></div>}</div><div className="asset-bottom"><span><CircleHelp size={13} /> Asset data is read from IIH Essentials</span><button onClick={() => void loadDashboard()}>Refresh list</button></div></article>
         </section>
         <footer className="dashboard-footer"><span>Performance Insight <b>·</b> Industrial Edge</span><span>{settings.baseUrl ? `Source: ${settings.baseUrl}` : 'Configure an IIH Essentials device to begin'}</span><button onClick={() => setShowSettings(true)}>Connection settings</button></footer>
-      </main>
+      </main>}
 
-      {showSettings && <div className="modal-shade" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSettings(false); }}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><button className="modal-x" onClick={() => setShowSettings(false)} aria-label="Close"><X size={18} /></button><div className="section-kicker">DEVICE CONNECTION</div><h2 id="modal-title">Connect IIH Essentials</h2><p>Data is requested directly from your IIH Essentials API by this browser. No backend service is used.</p><label className="field-label" htmlFor="deviceUrl">IIH Essentials base URL</label><input id="deviceUrl" className="url-input" value={draftUrl} onChange={(event) => setDraftUrl(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveAndConnect(); }} placeholder="https://192.168.1.10/iih-essentials" autoFocus /><span className="field-help">Examples: <code>https://&lt;device-ip&gt;/iih-essentials</code> or <code>http://localhost:4203</code></span><label className="credentials-toggle"><input type="checkbox" checked={draftCredentials} onChange={(event) => setDraftCredentials(event.target.checked)} /><span>Include browser session credentials</span></label><div className="auth-note"><AlertCircle size={15} /><span>Sign in to the Industrial Edge device in this browser. For a different page origin, the device must allow it through CORS. Browsers do not let frontend code set the IIH auth cookie directly.</span></div>{error && <div className="modal-error">{error}</div>}<div className="modal-actions"><button className="cancel-button" onClick={() => setShowSettings(false)}>Cancel</button><button className="blue-button" onClick={saveAndConnect} disabled={connection === 'connecting'}>{connection === 'connecting' ? <><LoaderCircle className="spin" size={15} /> Connecting</> : <>Save &amp; connect <ChevronRight size={15} /></>}</button></div><div className="privacy-note"><Check size={13} /> URL preferences are saved in this browser only.</div></section></div>}
+      {showSettings && <div className="modal-shade" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSettings(false); }}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><button className="modal-x" onClick={() => setShowSettings(false)} aria-label="Close"><X size={18} /></button><div className="section-kicker">DEVICE CONNECTION</div><h2 id="modal-title">Connect IIH Essentials</h2><p>The deployed app defaults to the IIH Essentials service inside the Industrial Edge Docker network.</p><label className="field-label" htmlFor="deviceUrl">IIH Essentials base URL</label><input id="deviceUrl" className="url-input" value={draftUrl} onChange={(event) => setDraftUrl(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveAndConnect(); }} placeholder="http://edgeappdataservice:4203" autoFocus /><span className="field-help">Default deployed URL: <code>http://edgeappdataservice:4203</code>. Development kit: <code>http://localhost:4203</code></span><label className="credentials-toggle"><input type="checkbox" checked={draftCredentials} onChange={(event) => setDraftCredentials(event.target.checked)} /><span>Include browser session credentials</span></label><div className="auth-note"><AlertCircle size={15} /><span>Sign in to the Industrial Edge device in this browser. The same-origin route forwards its IIH auth cookie to the service. Custom external URLs may need CORS access.</span></div>{error && <div className="modal-error">{error}</div>}<div className="modal-actions"><button className="cancel-button" onClick={() => setShowSettings(false)}>Cancel</button><button className="blue-button" onClick={saveAndConnect} disabled={connection === 'connecting'}>{connection === 'connecting' ? <><LoaderCircle className="spin" size={15} /> Connecting</> : <>Save &amp; connect <ChevronRight size={15} /></>}</button></div><div className="privacy-note"><Check size={13} /> URL preferences are saved in this browser only.</div></section></div>}
     </div>
   );
 }

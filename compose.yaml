@@ -4,3 +4,10 @@ services:
     image: performance-insight-dashboard:1.0.0
     restart: always
     mem_limit: 128m
+    networks:
+      - proxy-redirect
+
+networks:
+  proxy-redirect:
+    external:
+      name: proxy-redirect
