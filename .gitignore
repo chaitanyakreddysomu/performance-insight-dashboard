@@ -1,5 +1,7 @@
 node_modules/
 dist/
+exports/*.app
+exports/*.tar
 *.tsbuildinfo
 .env*
 .DS_Store

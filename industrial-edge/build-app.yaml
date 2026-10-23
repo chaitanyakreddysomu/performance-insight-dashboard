@@ -4,7 +4,7 @@ variables:
   version: "1.0.0"
   redirectsection: "dashboard"
   redirecturl: "80"
-  exportpath: "./dist/industrial-edge"
+  exportpath: "./exports"
 
 commands:
   - command:

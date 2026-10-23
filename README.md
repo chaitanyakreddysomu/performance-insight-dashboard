@@ -31,11 +31,11 @@ Prerequisites: Docker Engine/Desktop and Siemens `iectl`, with a Publisher works
 ./industrial-edge/build-app.ps1
 ```
 
-This builds `performance-insight-dashboard:1.0.0`, applies [`industrial-edge/build-app.yaml`](industrial-edge/build-app.yaml), and exports the `.app` package under `dist/industrial-edge/`. Import that file using Industrial Edge App Publisher or the corresponding IEM import workflow, validate it, and install it on the target device.
+This builds `performance-insight-dashboard:1.0.0`, applies [`industrial-edge/build-app.yaml`](industrial-edge/build-app.yaml), and exports the `.app` package under `exports/`. Import that file using Industrial Edge App Publisher or the corresponding IEM import workflow, validate it, and install it on the target device.
 
 ### Generate the `.app` from GitHub Actions
 
-Every push to `main` runs a single workflow that builds the frontend, builds the Docker image, exports the `.app`, and uploads it as the `performance-insight-industrial-edge-app` Actions artifact. Version tags (`v*`) and manual runs use the same flow.
+Every push to `main` runs a single workflow that builds the frontend, builds the Docker image, exports the `.app` into `exports/`, and uploads it as the `performance-insight-industrial-edge-app` Actions artifact. Version tags (`v*`) and manual runs use the same flow.
 
 The workflow requires a Linux x64 self-hosted GitHub Actions runner with Siemens `iectl` and Docker installed. Register it with the default labels `self-hosted`, `linux`, and `x64`; it no longer requires the extra custom `industrial-edge` label. On that runner, configure a persistent Publisher workspace and a Docker Engine API at `http://127.0.0.1:2375` (reachable only from the runner host):
 
