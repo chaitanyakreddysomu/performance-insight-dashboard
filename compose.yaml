@@ -1,0 +1,6 @@
+version: "2.4"
+services:
+  dashboard:
+    image: performance-insight-dashboard:1.0.0
+    restart: always
+    mem_limit: 128m

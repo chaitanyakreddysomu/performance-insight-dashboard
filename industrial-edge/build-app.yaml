@@ -1,0 +1,44 @@
+variables:
+  appname: "Performance Insight Dashboard"
+  reponame: "performance-insight-dashboard"
+  version: "1.0.0"
+  redirectsection: "dashboard"
+  redirecturl: "80"
+  exportpath: "./dist/industrial-edge"
+
+commands:
+  - command:
+    target: publisher
+    resource: workspace.init
+    parameters:
+      allowfailure: "true"
+  - command:
+    target: publisher
+    resource: standalone-app.create
+    parameters:
+      appname: "${{appname}}"
+      reponame: "${{reponame}}"
+      iconpath: "./industrial-edge/icon.svg"
+      appdescription: "Frontend-only IIH Essentials operator dashboard"
+      allowfailure: "true"
+  - command:
+    target: publisher
+    resource: standalone-app.version.create
+    parameters:
+      appname: "${{appname}}"
+      versionnumber: "${{version}}"
+      yamlpath: "./compose.yaml"
+      changelogs: "Initial TypeScript operator dashboard"
+      redirectsection: "${{redirectsection}}"
+      redirecttype: "FromBoxSpecificPort"
+      redirecturl: "${{redirecturl}}"
+      restredirecturl: ""
+      allowfailure: "false"
+  - command:
+    target: publisher
+    resource: standalone-app.version.export
+    parameters:
+      appname: "${{appname}}"
+      versionnumber: "${{version}}"
+      exportpath: "${{exportpath}}"
+      allowfailure: "false"
