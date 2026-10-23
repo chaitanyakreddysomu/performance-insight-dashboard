@@ -19,6 +19,7 @@ type ApiCatalog = { info: { title: string; version: string }; endpointCount: num
 const DEFAULT_API_BASE = 'http://edgeappdataservice:4203';
 const savedApiBase = localStorage.getItem('iihBase');
 const apiCatalog = apiCatalogData as ApiCatalog;
+const supportedApiEndpoints = apiCatalog.endpoints.filter((endpoint) => !endpoint.deprecated);
 
 const storedSettings: ApiSettings = {
   baseUrl: savedApiBase && savedApiBase !== 'http://localhost:4203' ? savedApiBase : DEFAULT_API_BASE,
@@ -28,7 +29,12 @@ const unwrap = (value: any): any[] => Array.isArray(value) ? value :
   Array.isArray(value?.data) ? value.data : Array.isArray(value?.items) ? value.items :
     Array.isArray(value?.assets) ? value.assets : Array.isArray(value?.variables) ? value.variables : [];
 const idOf = (value?: AnyRecord) => value?.id ?? value?.anchor ?? value?.['$anchor'] ?? value?.variableId ?? value?.assetId ?? '';
-const nameOf = (value?: AnyRecord) => value?.name ?? value?.displayName ?? value?.label ?? value?.['$anchor'] ?? 'Unnamed';
+const nameOf = (value?: AnyRecord) => value?.name ?? value?.displayName ?? value?.label ?? dictionaryValue(value?.['$displayname']) ?? value?.['$name'] ?? value?.['$anchor'] ?? 'Unnamed';
+function dictionaryValue(value: unknown) {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') return Object.values(value as AnyRecord)[0];
+  return undefined;
+}
 const formatTime = (raw?: string) => raw ? new Date(raw).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
 const resolveApiUrl = (baseUrl: string, path: string) => baseUrl.replace(/\/+$/, '') === DEFAULT_API_BASE ? `/iih-api${path}` : `${baseUrl.replace(/\/+$/, '')}${path}`;
 
@@ -55,7 +61,7 @@ function ApiExplorer({ settings }: { settings: ApiSettings }) {
   const [expanded, setExpanded] = useState('');
   const groups = useMemo(() => {
     const needle = search.toLowerCase().trim();
-    const matches = apiCatalog.endpoints.filter((endpoint) => !needle || `${endpoint.path} ${endpoint.method} ${endpoint.summary} ${endpoint.tags.join(' ')}`.toLowerCase().includes(needle));
+    const matches = supportedApiEndpoints.filter((endpoint) => !needle || `${endpoint.path} ${endpoint.method} ${endpoint.summary} ${endpoint.tags.join(' ')}`.toLowerCase().includes(needle));
     const grouped = new Map<string, ApiEndpoint[]>();
     for (const endpoint of matches) {
       const tag = endpoint.tags[0] ?? 'Other';
@@ -66,9 +72,9 @@ function ApiExplorer({ settings }: { settings: ApiSettings }) {
   const visibleCount = groups.reduce((count, [, endpoints]) => count + endpoints.length, 0);
 
   return <main className="api-page">
-    <div className="api-page-head"><div><div className="section-kicker">IIH ESSENTIALS REST API</div><h1>API Explorer</h1><p>Browse every operation in the Siemens {apiCatalog.info.version} specification. Open a GET operation to call IIH Essentials and inspect its live response.</p></div><div className="api-version">OpenAPI <b>{apiCatalog.info.version}</b></div></div>
+    <div className="api-page-head"><div><div className="section-kicker">IIH ESSENTIALS REST API</div><h1>API Explorer</h1><p>Browse supported operations in the Siemens {apiCatalog.info.version} specification. Deprecated operations are hidden. Open a GET operation to call IIH Essentials and inspect its live response.</p></div><div className="api-version">OpenAPI <b>{apiCatalog.info.version}</b></div></div>
     <div className="api-upstream"><span className="upstream-led" /><div><b>Live API target</b><code>{settings.baseUrl || DEFAULT_API_BASE}</code></div><span className="proxy-note">Device network via same-origin route</span></div>
-    <div className="api-toolbar"><label className="search-box api-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search paths, operations, or groups" /></label><span>{visibleCount} of {apiCatalog.endpointCount} operations</span></div>
+    <div className="api-toolbar"><label className="search-box api-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search paths, operations, or groups" /></label><span>{visibleCount} of {supportedApiEndpoints.length} operations</span></div>
     <div className="api-groups">{groups.map(([tag, endpoints]) => <section className="api-group" key={tag}><header><div><h2>{tag}</h2><p>{apiCatalog.tags.find((item) => item.name === tag)?.description || `${endpoints.length} documented operation${endpoints.length === 1 ? '' : 's'}`}</p></div><span>{endpoints.length}</span></header><div className="api-operation-list">{endpoints.map((endpoint, index) => {
       const operationKey = `${tag}:${endpoint.method}:${endpoint.path}:${index}`;
       const isOpen = expanded === operationKey;
@@ -203,9 +209,19 @@ function App() {
     setConnection('connecting'); setError('');
     try {
       const assetResult = await apiGet<unknown>(nextSettings.baseUrl, '/DataService/anchor/v1/assets?take=1000', nextSettings.credentials);
-      const signalResult = await apiGet<unknown>(nextSettings.baseUrl, '/DataService/Variables', nextSettings.credentials);
+      const signalResult = await apiGet<unknown>(nextSettings.baseUrl, '/DataService/anchor-ex/v1/attributes?take=1000&_includeSource=true&_includePath=true', nextSettings.credentials);
       const nextAssets = unwrap(assetResult) as Asset[];
-      const nextSignals = unwrap(signalResult) as Signal[];
+      const nextSignals = (unwrap(signalResult) as Signal[])
+        .filter((signal) => signal.$_source != null)
+        .map((signal) => ({
+          ...signal,
+          id: idOf(signal),
+          variableId: idOf(signal),
+          name: nameOf(signal),
+          unit: signal.unit ?? signal.$unit,
+          assetId: signal.$_owner ?? signal.assetId,
+          assetName: signal.$_path?.name ?? signal.$_path?.displayName,
+        }));
       setAssets(nextAssets); setSignals(nextSignals);
       if (!selectedSignal && nextSignals[0]) setSelectedSignal(idOf(nextSignals[0]));
       setConnection('connected'); setLastUpdated(new Date());
@@ -220,7 +236,7 @@ function App() {
     const ids = sourceSignals.map(idOf).filter(Boolean).slice(0, 100);
     if (!ids.length) { setSeries({}); return; }
     const to = new Date(); const from = new Date(to.getTime() - hours * 60 * 60 * 1000);
-    const params = new URLSearchParams({ variableIds: JSON.stringify(ids), from: from.toISOString(), to: to.toISOString(), limit: '100' });
+    const params = new URLSearchParams({ variableIds: ids.join(','), from: from.toISOString(), to: to.toISOString(), limit: '100' });
     try {
       const result = await apiGet<unknown>(nextSettings.baseUrl, `/DataService/Data?${params}`, nextSettings.credentials);
       const next: Record<string, Point[]> = {};
