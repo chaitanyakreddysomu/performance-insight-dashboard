@@ -37,7 +37,7 @@ jobs:
         env:
           RUN_NUMBER: ${{ github.run_number }}
         run: |
-          sed -i "s/version: \"1.0.14\"/version: \"1.0.${RUN_NUMBER}\"/" industrial-edge/build-app.yaml
+          sed -i "s/version: \"1.0.15\"/version: \"1.0.${RUN_NUMBER}\"/" industrial-edge/build-app.yaml
           docker build -t performance-insight-dashboard:1.0.0 .
           iectl apply -f ./industrial-edge/build-app.yaml
           find exports -maxdepth 1 -type f -name '*.app' -print -quit | grep -q .

@@ -36,6 +36,18 @@ function dictionaryValue(value: unknown) {
   return undefined;
 }
 const formatTime = (raw?: string) => raw ? new Date(raw).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+const formatSignalValue = (value: unknown) => {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString() : String(value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '—';
+    const numeric = Number(trimmed);
+    return Number.isFinite(numeric) ? numeric.toLocaleString() : value;
+  }
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  try { return JSON.stringify(value) ?? String(value); } catch { return String(value); }
+};
 const resolveApiUrl = (baseUrl: string, path: string) => baseUrl.replace(/\/+$/, '') === DEFAULT_API_BASE ? `/iih-api${path}` : `${baseUrl.replace(/\/+$/, '')}${path}`;
 
 async function apiGet<T>(baseUrl: string, path: string, credentials: boolean): Promise<T> {
@@ -365,7 +377,7 @@ function App() {
         <section className="lower-grid">
           <article className="panel signals-panel"><div className="panel-heading"><div><div className="section-kicker">PROCESS DATA</div><h2>Signal monitor</h2><p>Live values from IIH Essentials</p></div><div className="table-actions"><label className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search signals" /></label><button className="outline-button" onClick={() => void loadSeries()}><RefreshCw size={13} /> Update</button></div></div><div className="table-scroll"><table><thead><tr><th>SIGNAL</th><th>ASSET</th><th>LATEST VALUE</th><th>UNIT</th><th>QUALITY</th><th>LAST UPDATE</th><th /></tr></thead><tbody>{filteredSignals.slice(0, 60).map((signal) => {
             const signalId = idOf(signal); const data = series[signalId] ?? []; const last = data.at(-1); const assetId = signal.assetId ?? signal.asset?.id ?? signal.parentId; const assetName = assets.find((asset) => idOf(asset) === assetId)?.name ?? signal.assetName ?? '—'; const selected = idOf(activeSignal) === signalId;
-            return <tr key={signalId} className={selected ? 'selected-row' : ''} onClick={() => setSelectedSignal(signalId)}><td><span className="signal-cell"><span className="signal-badge"><Activity size={13} /></span><b>{nameOf(signal)}</b></span></td><td>{assetName}</td><td className="value-cell">{last ? Number(last.value).toLocaleString() : '—'}</td><td>{signal.unit || '—'}</td><td><span className={`quality-chip ${last && Number(last.qualitycode ?? 192) >= 192 ? 'good' : last ? 'poor' : ''}`}><i />{last ? Number(last.qualitycode ?? 192) >= 192 ? 'Good' : `Code ${last.qualitycode}` : 'No data'}</span></td><td>{last ? formatTime(last.timestamp) : '—'}</td><td><button className="row-arrow" onClick={(event) => { event.stopPropagation(); setSelectedSignal(signalId); }} aria-label={`Select ${nameOf(signal)}`}><ChevronRight size={16} /></button></td></tr>;
+            return <tr key={signalId} className={selected ? 'selected-row' : ''} onClick={() => setSelectedSignal(signalId)}><td><span className="signal-cell"><span className="signal-badge"><Activity size={13} /></span><b>{nameOf(signal)}</b></span></td><td>{assetName}</td><td className="value-cell">{last ? formatSignalValue(last.value) : '—'}</td><td>{signal.unit || '—'}</td><td><span className={`quality-chip ${last && Number(last.qualitycode ?? 192) >= 192 ? 'good' : last ? 'poor' : ''}`}><i />{last ? Number(last.qualitycode ?? 192) >= 192 ? 'Good' : `Code ${last.qualitycode}` : 'No data'}</span></td><td>{last ? formatTime(last.timestamp) : '—'}</td><td><button className="row-arrow" onClick={(event) => { event.stopPropagation(); setSelectedSignal(signalId); }} aria-label={`Select ${nameOf(signal)}`}><ChevronRight size={16} /></button></td></tr>;
           })}{filteredSignals.length === 0 && <tr><td className="empty-cell" colSpan={7}>{connected ? 'No signals found. Check that IIH Essentials has variables configured.' : 'Connect to IIH Essentials to load your process signals.'}</td></tr>}</tbody></table></div><div className="table-foot"><span>Showing {Math.min(filteredSignals.length, 60)} of {filteredSignals.length} signals</span><span>Loaded signals refresh every second</span></div></article>
           <article className="panel assets-panel"><div className="panel-heading"><div><div className="section-kicker">EQUIPMENT</div><h2>Asset hierarchy</h2><p>{assets.length} assets available</p></div><button className="outline-icon" title="Refresh assets" onClick={() => void loadDashboard()}><RefreshCw size={14} /></button></div><div className="asset-list">{assets.slice(0, 9).map((asset) => {
             const assetId = idOf(asset); const count = signals.filter((signal) => (signal.assetId ?? signal.asset?.id ?? signal.parentId) === assetId).length;
