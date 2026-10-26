@@ -384,7 +384,9 @@ function MetricCard({ label, value, unit, caption, icon, accent }: { label: stri
   return <article className="metric-card"><div className="metric-head"><span>{label}</span><span className={`metric-icon ${accent}`}>{icon}</span></div><div className="metric-reading"><strong>{value}</strong><span>{unit}</span></div><div className="metric-caption">{caption}</div><div className={`metric-line ${accent}`} /></article>;
 }
 
-const OPERATOR_BATCH_ID = 'aa72e1b1-bf4a-473c-981f-d3176248d575';
+const OPERATOR_BATCH_ID = '8757fe1a-fcb3-44fe-9ff7-3254ac398a21';
+const OPERATOR_RPM_ID = '87f024cd-42c6-4f63-92d9-310bde304664';
+const OPERATOR_TEMPERATURE_ID = 'dfdf9c2c-19d2-4797-bb27-bae9ba826eab';
 type BatchEvent = { value: string; timestamp: string; label: string };
 type OperatorSignal = { id: string; name: string; unit: string };
 
@@ -459,20 +461,13 @@ function OperatorDashboard({ settings }: { settings: ApiSettings }) {
     let stopped = false;
     setLoading(true);
     setError('');
-    Promise.all([
-      readOperatorHistory(settings, OPERATOR_BATCH_ID),
-      apiGet<unknown>(settings.baseUrl, '/DataService/anchor-ex/v1/attributes?take=1000&_includeSource=true&_includePath=true', settings.credentials),
-    ]).then(([history, attributeResult]) => {
+    readOperatorHistory(settings, OPERATOR_BATCH_ID).then((history) => {
       if (stopped) return;
       const events = toBatchEvents(history);
-      const attributes = unwrap(attributeResult) as AnyRecord[];
-      const rpm = attributes.find((item) => /rpm|revolutions per minute|rotational speed/i.test(nameOf(item)));
-      const temperature = attributes.find((item) => /temp|temperature/i.test(nameOf(item)));
-      const signalFrom = (item?: AnyRecord): OperatorSignal | null => item && idOf(item) ? { id: idOf(item), name: nameOf(item), unit: item.unit ?? item.$unit ?? '' } : null;
       setBatchHistory(events);
       setSelectedBatchIndex((selected) => selected >= 0 && selected < events.length - 1 ? selected : events.length - 2);
-      setRpmSignal(signalFrom(rpm));
-      setTemperatureSignal(signalFrom(temperature));
+      setRpmSignal({ id: OPERATOR_RPM_ID, name: 'Motor RPM', unit: 'rpm' });
+      setTemperatureSignal({ id: OPERATOR_TEMPERATURE_ID, name: 'Motor temperature', unit: '°C' });
       if (!events.length) setError('No batch history was returned for the configured batch data attribute. Confirm that this ID is an IIH time-series variable.');
     }).catch((reason) => {
       if (!stopped) setError(reason instanceof Error ? reason.message : 'Could not load batch data from IIH Essentials.');
