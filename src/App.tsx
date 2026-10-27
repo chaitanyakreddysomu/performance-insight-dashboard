@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import {
   Activity, AlertCircle, ArrowDownRight, ArrowUpRight, BarChart3, Braces, Check, ChevronDown,
   ChevronRight, CircleHelp, Clock3, Factory, Gauge, Layers3, LoaderCircle, RefreshCw,
-  Search, Settings2, SlidersHorizontal, Wifi, X, Play,
+  MoreHorizontal, Search, Settings2, SlidersHorizontal, Wifi, X, Play,
 } from 'lucide-react';
 import apiCatalogData from './data/iih-essentials-2.7.json';
 
@@ -186,7 +186,7 @@ function App() {
   const [draftUrl, setDraftUrl] = useState(storedSettings.baseUrl);
   const [draftCredentials, setDraftCredentials] = useState(storedSettings.credentials);
   const [showSettings, setShowSettings] = useState(false);
-  const [view, setView] = useState<'dashboard' | 'api' | 'operator'>(() => window.location.pathname.startsWith('/api') ? 'api' : window.location.pathname.startsWith('/operator') ? 'operator' : 'dashboard');
+  const [view, setView] = useState<'dashboard' | 'api' | 'operator' | 'performance'>(() => window.location.pathname.startsWith('/api') ? 'api' : window.location.pathname.startsWith('/operator') ? 'operator' : window.location.pathname.startsWith('/performance') ? 'performance' : 'dashboard');
   const [connection, setConnection] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
   const [error, setError] = useState('');
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -204,7 +204,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const onPopState = () => setView(window.location.pathname.startsWith('/api') ? 'api' : window.location.pathname.startsWith('/operator') ? 'operator' : 'dashboard');
+    const onPopState = () => setView(window.location.pathname.startsWith('/api') ? 'api' : window.location.pathname.startsWith('/operator') ? 'operator' : window.location.pathname.startsWith('/performance') ? 'performance' : 'dashboard');
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
@@ -318,7 +318,8 @@ function App() {
     };
   }, [signals, settings.baseUrl, settings.credentials]);
 
-  useEffect(() => { if (settings.baseUrl) void loadDashboard(); /* restore saved device on first render */ // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (settings.baseUrl) void loadDashboard(); /* restore saved device on first render */ // eslint-disable-line react-hooks/exhaustive-deps
   }, []);
 
   function saveAndConnect() {
@@ -329,22 +330,22 @@ function App() {
     setSettings(next); setShowSettings(false); setSelectedSignal(''); void loadDashboard(next);
   }
 
-  function navigate(nextView: 'dashboard' | 'api' | 'operator') {
-    window.history.pushState({}, '', nextView === 'api' ? '/api' : nextView === 'operator' ? '/operator' : '/');
+  function navigate(nextView: 'dashboard' | 'api' | 'operator' | 'performance') {
+    window.history.pushState({}, '', nextView === 'api' ? '/api' : nextView === 'operator' ? '/operator' : nextView === 'performance' ? '/performance' : '/');
     setView(nextView);
   }
 
   const connected = connection === 'connected';
-  const pageTitle = view === 'operator' ? 'Operator Dashboard' : view === 'api' ? 'API Explorer' : 'Overview';
+  const pageTitle = view === 'operator' ? 'Operator Dashboard' : view === 'api' ? 'API Explorer' : view === 'performance' ? 'Performance' : 'Overview';
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="product"><span className="product-symbol"><Activity size={17} /></span><span>Performance Insight <em>{pageTitle}</em></span></div>
-        <nav className="page-nav"><button className={view === 'dashboard' ? 'selected' : ''} onClick={() => navigate('dashboard')}>Overview</button><button className={view === 'operator' ? 'selected' : ''} onClick={() => navigate('operator')}><Gauge size={14} /> Operator Dashboard</button><button className={view === 'api' ? 'selected' : ''} onClick={() => navigate('api')}><Braces size={14} /> API Explorer</button></nav>
+        <nav className="page-nav"><button className={view === 'dashboard' ? 'selected' : ''} onClick={() => navigate('dashboard')}>Overview</button><button className={view === 'operator' ? 'selected' : ''} onClick={() => navigate('operator')}><Gauge size={14} /> Operator Dashboard</button><button className={view === 'performance' ? 'selected' : ''} onClick={() => navigate('performance')}><Activity size={14} /> Performance</button><button className={view === 'api' ? 'selected' : ''} onClick={() => navigate('api')}><Braces size={14} /> API Explorer</button></nav>
         <div className="topbar-right"><span className={`connection-pill ${connected ? 'is-online' : ''}`}><i />{connected ? 'CONNECTED' : connection === 'connecting' ? 'CONNECTING' : 'NOT CONNECTED'}</span><span className="clock-label"><Clock3 size={14} />{new Date(wallClockNow).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}</span><button className="top-icon" title="Connection settings" onClick={() => setShowSettings(true)}><Settings2 size={18} /></button></div>
       </header>
 
-      {view === 'api' ? <ApiExplorer settings={settings} /> : view === 'operator' ? <OperatorDashboard settings={settings} /> : <main className="dashboard">
+      {view === 'api' ? <ApiExplorer settings={settings} /> : view === 'operator' ? <OperatorDashboard settings={settings} /> : view === 'performance' ? <PerformanceDashboard /> : <main className="dashboard">
         <section className="status-strip">
           <div className="status-cell"><span className="status-label">DEVICE</span><span className="status-value"><span className={`device-led ${connected ? 'online' : ''}`} />{settings.baseUrl ? settings.baseUrl.replace(/^https?:\/\//, '') : 'IIH Essentials not configured'}</span></div>
           <span className="strip-divider" />
@@ -390,6 +391,63 @@ function App() {
       {showSettings && <div className="modal-shade" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSettings(false); }}><section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><button className="modal-x" onClick={() => setShowSettings(false)} aria-label="Close"><X size={18} /></button><div className="section-kicker">DEVICE CONNECTION</div><h2 id="modal-title">Connect IIH Essentials</h2><p>The deployed app defaults to the IIH Essentials service inside the Industrial Edge Docker network.</p><label className="field-label" htmlFor="deviceUrl">IIH Essentials base URL</label><input id="deviceUrl" className="url-input" value={draftUrl} onChange={(event) => setDraftUrl(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveAndConnect(); }} placeholder="http://edgeappdataservice:4203" autoFocus /><span className="field-help">Default deployed URL: <code>http://edgeappdataservice:4203</code>. Development kit: <code>http://localhost:4203</code></span><label className="credentials-toggle"><input type="checkbox" checked={draftCredentials} onChange={(event) => setDraftCredentials(event.target.checked)} /><span>Include browser session credentials</span></label><div className="auth-note"><AlertCircle size={15} /><span>Sign in to the Industrial Edge device in this browser. The same-origin route forwards its IIH auth cookie to the service. Custom external URLs may need CORS access.</span></div>{error && <div className="modal-error">{error}</div>}<div className="modal-actions"><button className="cancel-button" onClick={() => setShowSettings(false)}>Cancel</button><button className="blue-button" onClick={saveAndConnect} disabled={connection === 'connecting'}>{connection === 'connecting' ? <><LoaderCircle className="spin" size={15} /> Connecting</> : <>Save &amp; connect <ChevronRight size={15} /></>}</button></div><div className="privacy-note"><Check size={13} /> URL preferences are saved in this browser only.</div></section></div>}
     </div>
   );
+}
+
+function PerformancePanelActions() {
+  return <div className="performance-panel-actions"><button type="button" aria-label="Expand panel"><Search size={19} /></button><button type="button" aria-label="More panel options"><MoreHorizontal size={22} /></button></div>;
+}
+
+function SpecPositionChart({ domainMin, domainMax, ticks, specMin, specMax, predicted, actual }: { domainMin: number; domainMax: number; ticks: number[]; specMin: number; specMax: number; predicted: number; actual: number }) {
+  const position = (value: number) => Math.max(0, Math.min(100, ((value - domainMin) / (domainMax - domainMin)) * 100));
+  const actualInSpec = actual >= specMin && actual <= specMax;
+  return <div className="performance-spec-chart">
+    <h4>Position against specification</h4>
+    <div className="performance-track"><div className="performance-spec-band" style={{ left: `${position(specMin)}%`, width: `${position(specMax) - position(specMin)}%` }} /><span className="performance-marker predicted" style={{ left: `${position(predicted)}%` }} /><span className="performance-marker actual" style={{ left: `${position(actual)}%` }} /></div>
+    <div className="performance-ticks">{ticks.map((tick) => <span key={tick} style={{ left: `${position(tick)}%` }}>{tick.toLocaleString()}</span>)}</div>
+    <div className="performance-legend"><span><i className="predicted-dot" />Predicted ± MAE</span><span><i className="actual-dot" />Actual (lab)</span><span><i className="spec-dot" />Spec band</span><b className={actualInSpec ? 'in-spec' : 'out-spec'}>Actual: {actualInSpec ? 'In specification' : 'Out of specification'}</b></div>
+  </div>;
+}
+
+function ConfidenceGauge({ title, mae, confidence, unit, recommendation, note }: { title: string; mae: string; confidence: string; unit: string; recommendation: string; note: string }) {
+  const numericConfidence = Number(confidence.replace('%', '')) || 0;
+  const angle = Math.PI - (Math.max(0, Math.min(100, numericConfidence)) / 100) * Math.PI;
+  const needleX = 120 + 78 * Math.cos(angle);
+  const needleY = 121 - 78 * Math.sin(angle);
+  return <div className="performance-confidence-card">
+    <h3>{title}</h3>
+    <div className="performance-confidence-content">
+      <div className="performance-gauge-wrap">
+        <svg className="performance-gauge" viewBox="0 0 240 160" role="img" aria-label={`${title}: MAE ${mae}, confidence ${confidence}`}>
+          <path d="M 20 121 A 100 100 0 0 1 220 121" pathLength={100} className="gauge-arc gauge-green" />
+          <path d="M 20 121 A 100 100 0 0 1 220 121" pathLength={100} className="gauge-arc gauge-amber" />
+          <path d="M 20 121 A 100 100 0 0 1 220 121" pathLength={100} className="gauge-arc gauge-red" />
+          <line x1="120" y1="121" x2={needleX} y2={needleY} className="performance-gauge-needle" />
+          <circle cx="120" cy="121" r="6" className="performance-gauge-hub" />
+          <text x="5" y="151" className="gauge-caption" textAnchor="start">High conf.</text>
+          <text x="235" y="151" className="gauge-caption" textAnchor="end">Low conf.</text>
+        </svg>
+        <div className="performance-mae">MAE {mae} {unit} · {confidence}</div>
+      </div>
+      <div className="performance-recommendation"><b>Recommendation</b><strong>{recommendation}</strong><p>Prediction ± MAE sits fully inside spec.<br />No correction needed.<br />Lab test optional (audit sample).</p><small>{note}</small></div>
+    </div>
+  </div>;
+}
+
+function PerformanceDashboard() {
+  return <main className="performance-page">
+    <section className="performance-batch-header">
+      <div className="performance-batch-title"><h1>Batch Data</h1><PerformancePanelActions /></div>
+      <div className="performance-batch-status"><div><span>Current batch</span><b>TL-00019</b></div><div><span>Mode:</span><b>AUTO</b></div><div><span>Elapsed:</span><b>30:00</b></div><div className="performance-step"><span>Step:</span><b>Pre Heating</b></div></div>
+    </section>
+
+    <section className="performance-grid">
+      <article className="performance-panel"><header><h2>Viscosity Data</h2><PerformancePanelActions /></header><div className="performance-panel-body"><h3>Viscosity</h3><div className="performance-metrics"><div><span>Predicted</span><strong className="metric-predicted">103</strong><small>cPs</small></div><div><span>Actual (lab)</span><strong>4,000</strong><small>Operator entered</small></div><div><span>Spec (LSL - USL)</span><strong className="metric-spec">1,100 - 1,400</strong><small>cPs</small></div></div><SpecPositionChart domainMin={950} domainMax={1550} ticks={[950, 1000, 1100, 1200, 1300, 1400, 1500, 1550]} specMin={1100} specMax={1400} predicted={103} actual={4000} /></div></article>
+      <article className="performance-panel"><header><h2>pH Data</h2><PerformancePanelActions /></header><div className="performance-panel-body"><h3>pH</h3><div className="performance-metrics"><div><span>Predicted</span><strong className="metric-predicted">8.00</strong><small>± 0.09 (MAE, last 100)</small></div><div><span>Actual (lab)</span><strong>6.00</strong><small>Operator entered</small></div><div><span>Spec (LSL - USL)</span><strong className="metric-spec">7.40 - 7.80</strong><small>pH range</small></div></div><SpecPositionChart domainMin={6} domainMax={8.5} ticks={[6, 6.5, 7, 7.4, 7.6, 7.8, 8, 8.5]} specMin={7.4} specMax={7.8} predicted={8} actual={6} /></div></article>
+      <article className="performance-panel performance-confidence-panel"><header><h2>Viscosity Prediction Data</h2><PerformancePanelActions /></header><div className="performance-panel-body"><ConfidenceGauge title="Prediction confidence — MAE of last 100 batches" mae="1,911" confidence="95.57%" unit="cPs" recommendation="CLEAR ON PREDICTION" note="Dummy recommendation data" /></div></article>
+      <article className="performance-panel performance-confidence-panel"><header><h2>pH Prediction Data</h2><PerformancePanelActions /></header><div className="performance-panel-body"><ConfidenceGauge title="Prediction confidence — MAE of last 100 batches" mae="1" confidence="33%" unit="cPs" recommendation="CLEAR ON PREDICTION" note="Dummy recommendation data" /></div></article>
+    </section>
+    <p className="performance-dummy-note">Sample dashboard values are placeholders. Provide the IIH attribute IDs to connect live batch and prediction data.</p>
+  </main>;
 }
 
 function MetricCard({ label, value, unit, caption, icon, accent }: { label: string; value: string | number; unit: string; caption: string; icon: ReactNode; accent: string }) {
